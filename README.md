@@ -2,6 +2,7 @@
 
 A python project which crosses the Profiler from the Watch_Dogs series, and the Machine from Person of Interest.  
 
+
 The Profiler Machine handles:
 * input video stream (hopefully multiple streams simultaneously in the future)
 * face detection
