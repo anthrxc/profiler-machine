@@ -1,2 +1,6 @@
 .venv
 modules/__pycache__
+modules/core/__pycache__
+modules/io/__pycache__
+modules/profiler/__pycache__
+modules/ui/__pycache__
