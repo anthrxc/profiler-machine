@@ -1,23 +1,28 @@
 # modules/ui/console.py
 # Floating command console window with terminal aesthetic.
 
+import os
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QKeySequence
+from PyQt5.QtGui import QFont
+
+from modules.profiler.recognition import DESIGNATIONS, IMAGES_DIR
 
 WINDOW_W, WINDOW_H = 600, 120
 TITLE_BAR_H = 28
 
 
 class Console(QWidget):
-    # Signal emitted when a command is submitted
     command_submitted = pyqtSignal(str)
 
-    def __init__(self, main_window, feed_manager):
+    def __init__(self, main_window, feed_manager, db):
         super().__init__()
         self.main_window = main_window
         self.feed_manager = feed_manager
+        self.db = db
         self._drag_pos = None
+        self._active_user_ssn = None  # SSN of currently authenticated user
+        self._awaiting_name_for_ssn = None  # SSN waiting for name input
 
         self._init_ui()
         self.hide()
@@ -77,10 +82,10 @@ class Console(QWidget):
         input_layout.setSpacing(6)
         input_row.setLayout(input_layout)
 
-        prompt = QLabel(">")
-        prompt.setFont(QFont("Courier New", 11))
-        prompt.setStyleSheet("color: #ffffff;")
-        input_layout.addWidget(prompt)
+        self._prompt_label = QLabel(">")
+        self._prompt_label.setFont(QFont("Courier New", 11))
+        self._prompt_label.setStyleSheet("color: #ffffff;")
+        input_layout.addWidget(self._prompt_label)
 
         self._input = QLineEdit()
         self._input.setFont(QFont("Courier New", 11))
@@ -124,6 +129,22 @@ class Console(QWidget):
             self._input.setFocus()
 
     # -------------------------------------------------------------------------
+    # Auth helpers
+    # -------------------------------------------------------------------------
+
+    def _is_root(self):
+        if self._active_user_ssn is None:
+            return False
+        person = self.db.get_by_ssn(self._active_user_ssn)
+        return person and person[3] == 'root'
+
+    def _is_admin_or_root(self):
+        if self._active_user_ssn is None:
+            return False
+        person = self.db.get_by_ssn(self._active_user_ssn)
+        return person and person[3] in ('root', 'admin')
+
+    # -------------------------------------------------------------------------
     # Command handling
     # -------------------------------------------------------------------------
 
@@ -133,11 +154,24 @@ class Console(QWidget):
         self._status.setText(message)
 
     def _on_submit(self):
-        cmd = self._input.text().strip()
+        text = self._input.text().strip()
         self._input.clear()
-        if not cmd:
+        if not text:
             return
-        self._handle_command(cmd)
+
+        # Check if awaiting a name input
+        if self._awaiting_name_for_ssn:
+            ssn = self._awaiting_name_for_ssn
+            self._awaiting_name_for_ssn = None
+            self._prompt_label.setText(">")
+            if text.lower() == 'skip':
+                self._set_status(f"Name skipped for {ssn}.")
+            else:
+                self.db.update_person(ssn, 'name', text)
+                self._set_status(f"Name set to '{text}' for {ssn}.")
+            return
+
+        self._handle_command(text)
 
     def _handle_command(self, cmd):
         parts = cmd.strip().split()
@@ -149,17 +183,38 @@ class Console(QWidget):
             self.main_window.close()
 
         elif primary == "help" or primary == "?":
-            self._set_status("quit | fullscreen | feed [add/remove/focus/grid/list]")
+            self._set_status(
+                "quit | fullscreen | overlay [role] | "
+                "feed [add/remove/focus/grid/list] | "
+                "profiler [enroll/update/list/info/login]"
+            )
 
         elif primary == "fullscreen":
             self.main_window.toggle_fullscreen()
             self._set_status("Toggled fullscreen.")
+
+        elif primary == "overlay":
+            if not args:
+                self._set_status(f"Roles: {', '.join(DESIGNATIONS)}", ok=False)
+                return
+            role = args[0].lower()
+            success = self.feed_manager._designator.set_debug_role(role)
+            if success:
+                self._set_status(f"Debug overlay set to: {role}")
+            else:
+                self._set_status(f"Unknown role: '{role}'", ok=False)
 
         elif primary == "feed":
             if not args:
                 self._set_status("Usage: feed [add/remove/focus/grid/list]", ok=False)
                 return
             self._handle_feed(args)
+
+        elif primary == "profiler":
+            if not args:
+                self._set_status("Usage: profiler [enroll/update/list/info/login]", ok=False)
+                return
+            self._handle_profiler(args)
 
         else:
             self._set_status(f"Unknown command: '{primary}'", ok=False)
@@ -210,3 +265,98 @@ class Console(QWidget):
 
         else:
             self._set_status(f"Unknown feed command: '{sub}'", ok=False)
+
+    def _handle_profiler(self, args):
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "login":
+            # Login by SSN
+            if not rest:
+                self._set_status("Usage: profiler login [SSN]", ok=False)
+                return
+            ssn = rest[0]
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                self._set_status(f"No person found with ID: {ssn}", ok=False)
+                return
+            self._active_user_ssn = ssn
+            name = person[2] or "UNKNOWN"
+            designation = person[3].upper()
+            self._set_status(f"Logged in as {name} [{designation}] ({ssn})")
+
+        elif sub == "enroll":
+            if not rest:
+                self._set_status("Usage: profiler enroll <imagename>", ok=False)
+                return
+            filename = rest[0]
+            path = os.path.join(IMAGES_DIR, filename)
+            if not os.path.exists(path):
+                self._set_status(f"Image not found: {path}", ok=False)
+                return
+            ssn, success, error = self.db.enroll_from_image(
+                self.feed_manager.app, path, designation='irrelevant'
+            )
+            if success:
+                os.remove(path)
+                self._set_status(f"Enrolled → {ssn}. Enter name (or 'skip'):")
+                self._awaiting_name_for_ssn = ssn
+                self._prompt_label.setText("name >")
+            else:
+                self._set_status(f"Enrollment failed: {error}", ok=False)
+
+        elif sub == "list":
+            persons = self.db.get_all()
+            if not persons:
+                self._set_status("No persons on record.")
+                return
+            # Show first person in status, print rest to terminal
+            print("\n--- PERSONS ON RECORD ---")
+            for p in persons:
+                _, ssn, name, designation, notes, last_ts, last_feed = p
+                print(f"  {ssn}  {(name or 'UNKNOWN'):<20}  {designation.upper():<12}  last seen: {last_ts or 'never'}")
+            print("-------------------------\n")
+            self._set_status(f"{len(persons)} person(s) on record. See terminal for full list.")
+
+        elif sub == "info":
+            if not rest:
+                self._set_status("Usage: profiler info <SSN>", ok=False)
+                return
+            ssn = rest[0]
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                self._set_status(f"No person found: {ssn}", ok=False)
+                return
+            _, ssn, name, designation, notes, last_ts, last_feed = person
+            print(f"\n--- {ssn} ---")
+            print(f"  Name:        {name or 'UNKNOWN'}")
+            print(f"  Designation: {designation.upper()}")
+            print(f"  Notes:       {notes or '—'}")
+            print(f"  Last seen:   {last_ts or 'never'} (feed {last_feed})")
+            print()
+            self._set_status(f"{ssn} — {name or 'UNKNOWN'} [{designation.upper()}]. See terminal.")
+
+        elif sub == "update":
+            # profiler update <ssn> <field> <value>
+            if len(rest) < 3:
+                self._set_status("Usage: profiler update <SSN> <name|designation|notes> <value>", ok=False)
+                return
+            ssn, field, value = rest[0], rest[1].lower(), ' '.join(rest[2:])
+
+            # Only root can change designation to admin
+            if field == 'designation':
+                if value == 'admin' and not self._is_root():
+                    self._set_status("Only root can assign admin designation.", ok=False)
+                    return
+                if value not in DESIGNATIONS:
+                    self._set_status(f"Invalid designation. Options: {', '.join(DESIGNATIONS)}", ok=False)
+                    return
+
+            success = self.db.update_person(ssn, field, value)
+            if success:
+                self._set_status(f"Updated {field} for {ssn}.")
+            else:
+                self._set_status(f"Update failed for {ssn}.", ok=False)
+
+        else:
+            self._set_status(f"Unknown profiler command: '{sub}'", ok=False)

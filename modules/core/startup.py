@@ -19,6 +19,8 @@ STEPS = [
     "MACHINE.UI.INTERFACE",
     "MACHINE.PROFILER.FACIAL_DETECTION",
     "MACHINE.PROFILER.FACIAL_RECOGNITION",
+    "MACHINE.PROFILER.DATABASE",
+    "MACHINE.PROFILER.AUTO_ENROLL",
     "MACHINE.PROFILER.THREAT_ASSESSMENT",
 ]
 
@@ -66,19 +68,16 @@ class LoadingScreen(QWidget):
         layout.setSpacing(0)
         self.setLayout(layout)
 
-        # Title
         title = QLabel("PROFILER MACHINE // SYSTEM INITIALIZATION")
         title.setFont(QFont("Courier New", 13))
         title.setStyleSheet("color: #ffffff;")
         layout.addWidget(title)
 
-        # Divider
         divider = QLabel("=" * 74)
         divider.setFont(QFont("Courier New", 9))
         divider.setStyleSheet("color: #444444; margin-bottom: 16px;")
         layout.addWidget(divider)
 
-        # Step labels
         self._step_labels = []
         for _ in STEPS:
             lbl = QLabel("")
@@ -90,7 +89,6 @@ class LoadingScreen(QWidget):
 
         layout.addStretch()
 
-        # Footer
         self._footer_divider = QLabel("=" * 74)
         self._footer_divider.setFont(QFont("Courier New", 9))
         self._footer_divider.setStyleSheet("color: #444444;")
@@ -104,7 +102,6 @@ class LoadingScreen(QWidget):
         layout.addWidget(self._footer)
 
     def _on_warmup_complete(self):
-        """Called on the main thread via signal — safe to stop timer and close."""
         self._timer.stop()
         self.close()
 
@@ -161,11 +158,9 @@ class LoadingScreen(QWidget):
             return any(s['status'] == 'fail' for s in self._step_states)
 
     def _warmup_wrapper(self):
-        self._result['app'] = self._warmup()
+        self._result['app'], self._result['db'] = self._warmup()
         with self._lock:
             self._done = True
-
-        # Wait for startup sound to finish before closing (max 10s)
         self._sound_done.wait(timeout=10)
         time.sleep(0.5)
         self._close_signal.emit()
@@ -173,6 +168,7 @@ class LoadingScreen(QWidget):
     def _warmup(self):
         play_sound = None
         app = None
+        db = None
 
         # SYSTEM
         self._begin_step(STEPS[0])
@@ -219,7 +215,7 @@ class LoadingScreen(QWidget):
             print(f"[{_timestamp()}] MACHINE.PROFILER.FACIAL_DETECTION ERROR: {e}")
             self._fail_step()
 
-        # FACIAL_RECOGNITION — only attempt if detection succeeded
+        # FACIAL_RECOGNITION
         self._begin_step(STEPS[6])
         if app is not None:
             try:
@@ -231,8 +227,39 @@ class LoadingScreen(QWidget):
         else:
             self._fail_step()
 
-        # THREAT_ASSESSMENT
+        # DATABASE
         self._begin_step(STEPS[7])
+        try:
+            from modules.profiler.recognition import RecognitionDB
+            db = RecognitionDB()
+            db.connect()
+            count = db.count()
+            self._complete_step()
+            print(f"[{_timestamp()}] Database loaded: {count} person(s) on record.")
+        except Exception as e:
+            print(f"[{_timestamp()}] MACHINE.PROFILER.DATABASE ERROR: {e}")
+            self._fail_step()
+
+        # AUTO_ENROLL
+        self._begin_step(STEPS[8])
+        if db is not None and app is not None:
+            try:
+                results = db.enroll_startup_images(app)
+                if results:
+                    for filename, ssn, success, message in results:
+                        if success:
+                            print(f"[{_timestamp()}] Auto-enrolled '{filename}' → {ssn} ({message})")
+                        else:
+                            print(f"[{_timestamp()}] Failed to enroll '{filename}': {message}")
+                self._complete_step()
+            except Exception as e:
+                print(f"[{_timestamp()}] MACHINE.PROFILER.AUTO_ENROLL ERROR: {e}")
+                self._fail_step()
+        else:
+            self._fail_step()
+
+        # THREAT_ASSESSMENT
+        self._begin_step(STEPS[9])
         time.sleep(0.5)
         self._complete_step()
 
@@ -240,31 +267,27 @@ class LoadingScreen(QWidget):
         if self._has_failures():
             print(f"[{_timestamp()}] System initialization failed. Exiting...")
             time.sleep(2.0)
-            self._sound_done.set()  # unblock _warmup_wrapper so it can close
-            return None
+            self._sound_done.set()
+            return None, None
 
-        # Play startup sound and wait for it to finish
         if play_sound is not None:
             def _play_and_signal():
                 play_sound("assets/audio/startup.wav")
                 self._sound_done.set()
-
             threading.Thread(target=_play_and_signal, daemon=True).start()
         else:
-            self._sound_done.set()  # no sound, unblock immediately
+            self._sound_done.set()
 
-        return app
+        return app, db
 
     def get_app(self):
         return self._result.get('app')
 
+    def get_db(self):
+        return self._result.get('db')
+
 
 def run(qt_app):
-    """
-    Show the loading screen and block until warmup is complete.
-    Returns the initialized FaceAnalysis app.
-    qt_app: the QApplication instance created in main.py
-    """
     screen = LoadingScreen()
 
     geo = qt_app.desktop().screenGeometry()
@@ -276,4 +299,4 @@ def run(qt_app):
     screen.show()
     qt_app.exec_()
 
-    return screen.get_app()
+    return screen.get_app(), screen.get_db()

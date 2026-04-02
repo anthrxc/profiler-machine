@@ -7,12 +7,13 @@ from modules.profiler.designation import Designator
 
 
 class FeedManager:
-    def __init__(self, app):
+    def __init__(self, app, db):
         self.app = app
+        self.db = db
         self._feeds = {}
         self._lock = threading.Lock()
         self._focused = None
-        self._designator = Designator(app)
+        self._designator = Designator(app, db)
 
     # -------------------------------------------------------------------------
     # Feed management
@@ -70,12 +71,12 @@ class FeedManager:
     def get_frames(self):
         """Return a dict of {feed_id: frame} with overlays applied."""
         with self._lock:
-            raw = {fid: stream.get_frame() for fid, stream in self._feeds.items()}
+            raw = {fid: (stream.get_frame(), fid) for fid, stream in self._feeds.items()}
 
         processed = {}
-        for fid, frame in raw.items():
+        for fid, (frame, feed_id) in raw.items():
             if frame is not None:
-                processed[fid] = self._designator.process_frame(frame)
+                processed[fid] = self._designator.process_frame(frame, feed_id)
             else:
                 processed[fid] = None
 
