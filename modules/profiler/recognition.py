@@ -9,7 +9,8 @@ import cv2
 from datetime import datetime
 
 DB_PATH         = os.path.join('database', 'facedb.sqlite')
-IMAGES_DIR      = os.path.join('database', 'enroll')
+IMAGES_DIR      = os.path.join('database', 'images')
+LAST_SEEN_DIR   = os.path.join('database', 'last_seen')
 ENROLLED_DIR    = os.path.join('database', 'enrolled')
 
 DESIGNATIONS = ['irrelevant', 'root', 'admin', 'threat', 'victim', 'perpetrator']
@@ -54,6 +55,22 @@ def _get_random_description(designation):
         return None
 
 
+def save_last_seen(ssn, frame, bbox):
+    """Save a face crop to database/last_seen/<ssn>.jpg"""
+    os.makedirs(LAST_SEEN_DIR, exist_ok=True)
+    x1, y1, x2, y2 = bbox
+    pad = 10
+    h, w = frame.shape[:2]
+    x1 = max(0, x1 - pad)
+    y1 = max(0, y1 - pad)
+    x2 = min(w, x2 + pad)
+    y2 = min(h, y2 + pad)
+    if x2 <= x1 or y2 <= y1:
+        return
+    crop = frame[y1:y2, x1:x2]
+    cv2.imwrite(os.path.join(LAST_SEEN_DIR, f"{ssn}.jpg"), crop)
+
+
 def save_enrolled_image(ssn, frame, bbox):
     """Save a face crop to database/enrolled/<ssn>.jpg (only at enrollment time)."""
     os.makedirs(ENROLLED_DIR, exist_ok=True)
@@ -76,6 +93,7 @@ class RecognitionDB:
 
     def connect(self):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        os.makedirs(LAST_SEEN_DIR, exist_ok=True)
         os.makedirs(ENROLLED_DIR, exist_ok=True)
         self._conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self._create_tables()
@@ -137,7 +155,7 @@ class RecognitionDB:
     def remove_person(self, ssn):
         cursor = self._conn.execute('DELETE FROM persons WHERE stylized_id = ?', (ssn,))
         self._conn.commit()
-        for d in ENROLLED_DIR:
+        for d in [LAST_SEEN_DIR, ENROLLED_DIR]:
             p = os.path.join(d, f"{ssn}.jpg")
             if os.path.exists(p):
                 os.remove(p)

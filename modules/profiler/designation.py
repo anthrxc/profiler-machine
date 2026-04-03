@@ -153,6 +153,8 @@ class Designator:
                                 embedding,
                                 designation=designation,
                             )
+                            from modules.profiler.recognition import save_enrolled_image
+                            save_enrolled_image(ssn, frame, bbox);
                             print(f"[Designator] Auto-enrolled {ssn} as {designation}")
                             del self._tracking[tracking_key]
                             visible.add(ssn)
