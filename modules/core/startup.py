@@ -3,6 +3,8 @@
 
 import threading
 import time
+import os
+import ctypes
 from datetime import datetime
 
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
@@ -21,10 +23,16 @@ STEPS = [
     "MACHINE.PROFILER.FACIAL_RECOGNITION",
     "MACHINE.PROFILER.DATABASE",
     "MACHINE.PROFILER.AUTO_ENROLL",
+    "MACHINE.PROFILER.ANTISPOOF",
     "MACHINE.PROFILER.THREAT_ASSESSMENT",
 ]
 
 COL_WIDTH = 44
+
+CUDA_PATH = r"C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\\bin"
+CUDNN_PATH = r"C:\\Program Files\\NVIDIA\CUDNN\\v9.20\\bin\\12.9\\x64"
+
+ANTISPOOF_MODEL_PATH = os.path.join('assets', 'antispoof', 'MiniFASNetV2.onnx')
 
 
 def _timestamp():
@@ -158,7 +166,7 @@ class LoadingScreen(QWidget):
             return any(s['status'] == 'fail' for s in self._step_states)
 
     def _warmup_wrapper(self):
-        self._result['app'], self._result['db'] = self._warmup()
+        self._result['app'], self._result['db'], self._result['antispoof'] = self._warmup()
         with self._lock:
             self._done = True
         self._sound_done.wait(timeout=10)
@@ -169,6 +177,7 @@ class LoadingScreen(QWidget):
         play_sound = None
         app = None
         db = None
+        antispoof = None
 
         # SYSTEM
         self._begin_step(STEPS[0])
@@ -208,8 +217,14 @@ class LoadingScreen(QWidget):
         # FACIAL_DETECTION
         self._begin_step(STEPS[5])
         try:
+            os.add_dll_directory(CUDA_PATH)
+            ctypes.WinDLL(os.path.join(CUDA_PATH, "nvrtc-builtins64_128.dll"))
+            import onnxruntime as ort
+            ort.preload_dlls(cuda=True, cudnn=False, msvc=True, directory=CUDA_PATH)
+            ort.preload_dlls(cuda=False, cudnn=True, directory=CUDNN_PATH)
+
             from insightface.app import FaceAnalysis
-            app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+            app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
             self._complete_step()
         except Exception as e:
             print(f"[{_timestamp()}] MACHINE.PROFILER.FACIAL_DETECTION ERROR: {e}")
@@ -258,8 +273,18 @@ class LoadingScreen(QWidget):
         else:
             self._fail_step()
 
-        # THREAT_ASSESSMENT
+        # ANTISPOOF
         self._begin_step(STEPS[9])
+        try:
+            from modules.profiler.antispoof import AntiSpoofModel
+            antispoof = AntiSpoofModel(ANTISPOOF_MODEL_PATH)
+            self._complete_step()
+        except Exception as e:
+            print(f"[{_timestamp()}] MACHINE.PROFILER.ANTISPOOF ERROR: {e}")
+            self._fail_step()
+
+        # THREAT_ASSESSMENT
+        self._begin_step(STEPS[10])
         time.sleep(0.5)
         self._complete_step()
 
@@ -268,7 +293,7 @@ class LoadingScreen(QWidget):
             print(f"[{_timestamp()}] System initialization failed. Exiting...")
             time.sleep(2.0)
             self._sound_done.set()
-            return None, None
+            return None, None, None
 
         if play_sound is not None:
             def _play_and_signal():
@@ -278,13 +303,16 @@ class LoadingScreen(QWidget):
         else:
             self._sound_done.set()
 
-        return app, db
+        return app, db, antispoof
 
     def get_app(self):
         return self._result.get('app')
 
     def get_db(self):
         return self._result.get('db')
+
+    def get_antispoof(self):
+        return self._result.get('antispoof')
 
 
 def run(qt_app):
@@ -299,4 +327,4 @@ def run(qt_app):
     screen.show()
     qt_app.exec_()
 
-    return screen.get_app(), screen.get_db()
+    return screen.get_app(), screen.get_db(), screen.get_antispoof()

@@ -82,6 +82,11 @@ class FeedManager:
 
         return processed
 
+    def get_raw_frames(self):
+        """Return a dict of {feed_id: frame} without overlays — used for antispoof."""
+        with self._lock:
+            return {fid: stream.get_frame() for fid, stream in self._feeds.items()}
+
     def get_focused(self):
         """Return the currently focused feed_id, or None for grid view."""
         with self._lock:

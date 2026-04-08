@@ -11,6 +11,7 @@ import random
 from modules.profiler.recognition import (
     RecognitionDB, LIVE_ENROLL_DESIGNATIONS, LIVE_ENROLL_WEIGHTS
 )
+from modules.profiler.antispoof import AntiSpoofModel
 
 DEFAULT_ROLE = 'irrelevant'
 
@@ -24,6 +25,7 @@ ROLE_OVERLAYS = {
 }
 
 OVERLAY_DIR = os.path.join('assets', 'overlay')
+ANTISPOOF_WEIGHTS = os.path.join('assets', 'antispoof', 'MiniFASNetV2.onnx')
 AUTO_ENROLL_SECONDS = 3.0
 
 
@@ -41,6 +43,13 @@ class Designator:
 
         self._tracking = {}
         self._debug_role = None
+
+        self.antispoof = AntiSpoofModel(
+            model_path=ANTISPOOF_WEIGHTS,
+            scale=2.7
+        )
+        self._auth_request_ssn = None
+        self._auth_result = None
 
         self._running = True
         self._thread = threading.Thread(target=self._detection_loop, daemon=True)
@@ -262,3 +271,14 @@ class Designator:
         frame[fy1:fy2, fx1:fx2] = roi
 
         return frame
+    
+    def request_auth_check(self, ssn):
+        with self._lock:
+            self._auth_request_ssn = ssn
+            self._auth_result = None
+
+    def consume_auth_result(self):
+        with self._lock:
+            result = self._auth_result
+            self._auth_result = None
+            return result

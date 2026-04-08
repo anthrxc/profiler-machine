@@ -184,7 +184,7 @@ class Console(QWidget):
 
         elif primary == "help" or primary == "?":
             self._set_status(
-                "quit | fullscreen | overlay [role] | "
+                "quit | fullscreen "
                 "feed [add/remove/focus/grid/list] | "
                 "profiler [enroll/update/list/info/login]"
             )
@@ -193,24 +193,19 @@ class Console(QWidget):
             self.main_window.toggle_fullscreen()
             self._set_status("Toggled fullscreen.")
 
-        elif primary == "overlay":
-            if not args:
-                self._set_status(f"Roles: {', '.join(DESIGNATIONS)}", ok=False)
-                return
-            role = args[0].lower()
-            success = self.feed_manager._designator.set_debug_role(role)
-            if success:
-                self._set_status(f"Debug overlay set to: {role}")
-            else:
-                self._set_status(f"Unknown role: '{role}'", ok=False)
-
         elif primary == "feed":
+            if not self._is_admin_or_root():
+                self._set_status("Access denied. Admin or root required for feed commands.", ok=False)
+                return
             if not args:
                 self._set_status("Usage: feed [add/remove/focus/grid/list]", ok=False)
                 return
             self._handle_feed(args)
 
         elif primary == "profiler":
+            if not self._is_admin_or_root():
+                self._set_status("Access denied. Admin or root required for profiler commands.", ok=False)
+                return
             if not args:
                 self._set_status("Usage: profiler [enroll/update/list/info/login]", ok=False)
                 return
@@ -314,7 +309,7 @@ class Console(QWidget):
             print("\n--- PERSONS ON RECORD ---")
             for p in persons:
                 _, ssn, name, designation, notes, last_ts, last_feed = p
-                print(f"  {ssn}  {(name or 'UNKNOWN'):<20}  {designation.upper():<12}  last seen: {last_ts or 'never'}")
+                print(f"  {ssn}  {(name or 'UNKNOWN'):<20}  {designation.upper():<12}  last seen: {last_ts or 'never'}   {notes or ''}")
             print("-------------------------\n")
             self._set_status(f"{len(persons)} person(s) on record. See terminal for full list.")
 

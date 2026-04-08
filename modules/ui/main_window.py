@@ -23,7 +23,7 @@ TITLE_BAR_H     = 32
 CONSOLE_H       = 200
 WINDOW_H        = TITLE_BAR_H + FEED_H + CONSOLE_H
 
-AUTH_TIMEOUT    = 10.0
+AUTH_TIMEOUT    = 3.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,11 +115,12 @@ class FeedDisplay(QLabel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ConsoleWidget(QWidget):
-    def __init__(self, feed_manager, db, main_window):
+    def __init__(self, feed_manager, db, main_window, antispoof=None):
         super().__init__()
         self.feed_manager = feed_manager
         self.db = db
         self._main_window = main_window
+        self._antispoof = antispoof
 
         self._active_user_ssn = None
         self._last_seen_time = None
@@ -422,6 +423,37 @@ class ConsoleWidget(QWidget):
         if not self.feed_manager._designator.is_ssn_in_frame(ssn):
             self._print(f"Authentication failed — {ssn} not detected in any active feed.", ok=False)
             return
+
+        # Anti-spoof check
+        if self._antispoof is not None:
+            self._print("Running liveness check...")
+            designator = self.feed_manager._designator
+            with designator._lock:
+                results = list(designator._latest_results)
+            # Find the bbox for this SSN
+            bbox = None
+            for r in results:
+                if r.get('ssn') == ssn:
+                    bbox = r.get('bbox')
+                    break
+            if bbox is None:
+                self._print("Authentication failed — could not locate face in frame.", ok=False)
+                return
+            # Get the latest raw frame
+            frames = self.feed_manager.get_raw_frames()
+            frame = next(iter(frames.values()), None) if frames else None
+            if frame is None:
+                self._print("Authentication failed — no frame available.", ok=False)
+                return
+            result = self._antispoof.predict_from_bbox(frame, bbox)
+            if not result['ok']:
+                self._print("Authentication failed — liveness check error.", ok=False)
+                return
+            if not result['is_live']:
+                self._print(f"Authentication failed — spoofing detected (score: {result['score']:.2f}).", ok=False)
+                return
+            self._print(f"Liveness confirmed (score: {result['score']:.2f}).")
+
         self._active_user_ssn = ssn
         self._last_seen_time = None
         self._print(f"Authenticated as {person[2] or ssn} [{person[3].upper()}].")
@@ -575,10 +607,11 @@ class ConsoleWidget(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MainWindow(QWidget):
-    def __init__(self, feed_manager, db):
+    def __init__(self, feed_manager, db, antispoof=None):
         super().__init__()
         self.feed_manager = feed_manager
         self.db = db
+        self._antispoof = antispoof
         self._is_fullscreen = False
         self._profiler_visible = False
 
@@ -617,7 +650,7 @@ class MainWindow(QWidget):
 
         root_layout.addWidget(self._middle)
 
-        self._console = ConsoleWidget(feed_manager=self.feed_manager, db=self.db, main_window=self)
+        self._console = ConsoleWidget(feed_manager=self.feed_manager, db=self.db, main_window=self, antispoof=self._antispoof)
         root_layout.addWidget(self._console)
 
         # Give console input focus on startup

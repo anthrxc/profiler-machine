@@ -29,8 +29,8 @@ BOT_RIGHT_X             = 420
 HIGHLIGHT_TEXT_COLOR = {
     'irrelevant':   (0,   0,   0),
     'root':         (0,   0,   0),
-    'admin':        (0,   0,   0),
-    'threat':       (255, 255, 255),
+    'admin':        (255, 255, 255),
+    'threat':       (0,   0,   0),
     'victim':       (0,   0,   0),
     'perpetrator':  (0,   0,   0),
 }

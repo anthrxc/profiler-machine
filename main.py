@@ -13,7 +13,7 @@ def main():
     qt_app = QApplication(sys.argv)
 
     # Loading screen — blocks until warmup complete
-    app, db = run(qt_app)
+    app, db, antispoof = run(qt_app)
 
     if app is None or db is None:
         sys.exit(1)
@@ -21,7 +21,7 @@ def main():
     manager = FeedManager(app, db)
     manager.add_feed(0)
 
-    window = MainWindow(manager, db)
+    window = MainWindow(manager, db, antispoof)
     window.show()
 
     sys.exit(qt_app.exec_())
