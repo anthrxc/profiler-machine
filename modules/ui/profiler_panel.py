@@ -155,16 +155,20 @@ class ProfilerPanel(QWidget):
 
         designator = self.feed_manager._designator
         with designator._lock:
-            results = list(designator._latest_results)
+            results_by_feed = {
+                fid: list(feed_results)
+                for fid, feed_results in designator._latest_results.items()
+            }
 
-        visible_by_feed = {}
-        for fid in self.feed_manager.list_feeds():
-            visible_by_feed[fid] = []
-        for result in results:
-            if result.get('ssn'):
-                fid = designator._pending_feed_id
-                if fid in visible_by_feed:
-                    visible_by_feed[fid].append(result['ssn'])
+        visible_by_feed = {fid: [] for fid in self.feed_manager.list_feeds()}
+        results = []
+
+        for fid, feed_results in results_by_feed.items():
+            for result in feed_results:
+                results.append(result)
+                if result.get('ssn'):
+                    if fid in visible_by_feed:
+                        visible_by_feed[fid].append(result['ssn'])
 
         self._update_crime_chances(visible_by_feed)
 
@@ -177,7 +181,10 @@ class ProfilerPanel(QWidget):
 
         if not ssns_to_show:
             self._clear_cards()
-            self._status.setText("  No faces detected." if self._mode == 'all' else f"  {self._single_ssn} not in frame.")
+            self._status.setText(
+                "  No faces detected." if self._mode == 'all'
+                else f"  {self._single_ssn} not in frame."
+            )
             return
 
         self._status.setText(f"  {len(ssns_to_show)} profile(s) active.")

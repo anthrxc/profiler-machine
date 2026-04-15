@@ -429,22 +429,32 @@ class ConsoleWidget(QWidget):
             self._print("Running liveness check...")
             designator = self.feed_manager._designator
             with designator._lock:
-                results = list(designator._latest_results)
-            # Find the bbox for this SSN
+                results_by_feed = {
+                    fid: list(feed_results)
+                    for fid, feed_results in designator._latest_results.items()
+                }
+
             bbox = None
-            for r in results:
-                if r.get('ssn') == ssn:
-                    bbox = r.get('bbox')
+            matched_feed_id = None
+            for fid, feed_results in results_by_feed.items():
+                for r in feed_results:
+                    if r.get('ssn') == ssn:
+                        bbox = r.get('bbox')
+                        matched_feed_id = fid
+                        break
+                if bbox is not None:
                     break
+
             if bbox is None:
                 self._print("Authentication failed — could not locate face in frame.", ok=False)
                 return
-            # Get the latest raw frame
+
             frames = self.feed_manager.get_raw_frames()
-            frame = next(iter(frames.values()), None) if frames else None
+            frame = frames.get(matched_feed_id)
             if frame is None:
                 self._print("Authentication failed — no frame available.", ok=False)
                 return
+
             result = self._antispoof.predict_from_bbox(frame, bbox)
             if not result['ok']:
                 self._print("Authentication failed — liveness check error.", ok=False)

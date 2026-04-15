@@ -32,7 +32,7 @@ ANTISPOOF_WEIGHTS = os.path.join('assets', 'antispoof', 'MiniFASNetV2.onnx')
 AUTO_ENROLL_SECONDS = 3.0
 
 # Re-identify a tracked face every N seconds
-REIDENTIFY_INTERVAL = 2.0
+REIDENTIFY_INTERVAL = 10.0
 
 
 def _make_tracker():
@@ -52,11 +52,13 @@ class Designator:
         self._overlays = self._load_overlays()
 
         # Detection thread state
-        self._pending_frame = None
-        self._pending_feed_id = 0
-        self._latest_results = []   # list of dicts: {bbox, ssn, designation, track_id, face_age, face_sex}
+        # Per-feed queue: {feed_id: frame} — holds latest unprocessed frame per feed.
+        # Detection loop round-robins through feeds so no feed starves.
+        self._pending_frames = {}   # {feed_id: frame}
+        self._latest_results = {}   # {feed_id: [result dicts]}
         self._visible_ssns = set()
         self._lock = threading.Lock()
+        self._feed_order = []       # insertion-ordered list of known feed_ids
 
         # ByteTracker — one per feed
         self._trackers = {}         # {feed_id: BYTETracker}
@@ -111,10 +113,15 @@ class Designator:
 
     def _detection_loop(self):
         while self._running:
+            # Pick the next feed that has a pending frame (round-robin)
             with self._lock:
-                frame = self._pending_frame
-                feed_id = self._pending_feed_id
-                self._pending_frame = None
+                feed_id = None
+                frame = None
+                for fid in self._feed_order:
+                    if fid in self._pending_frames:
+                        feed_id = fid
+                        frame = self._pending_frames.pop(fid)
+                        break
 
             if frame is None:
                 time.sleep(0.01)
@@ -258,8 +265,14 @@ class Designator:
                 del self._pending_enrollment[tid]
 
             with self._lock:
-                self._latest_results = results
-                self._visible_ssns = visible
+                self._latest_results[feed_id] = results
+                # Recompute visible SSNs across all feeds
+                all_visible = set()
+                for feed_results in self._latest_results.values():
+                    for r in feed_results:
+                        if r['ssn']:
+                            all_visible.add(r['ssn'])
+                self._visible_ssns = all_visible
 
     def _match_detection(self, tracked_bbox, face_data, iou_threshold=0.3):
         """Find the InsightFace detection that best matches a tracked bbox by IoU."""
@@ -295,9 +308,11 @@ class Designator:
 
     def process_frame(self, frame, feed_id=0):
         with self._lock:
-            self._pending_frame = frame.copy()
-            self._pending_feed_id = feed_id
-            results = list(self._latest_results)
+            # Register feed order on first sight
+            if feed_id not in self._feed_order:
+                self._feed_order.append(feed_id)
+            self._pending_frames[feed_id] = frame.copy()
+            results = list(self._latest_results.get(feed_id, []))
 
         for result in results:
             role = self._debug_role or result['designation']
