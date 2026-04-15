@@ -1,5 +1,5 @@
 # modules/profiler/designation.py
-# Handles face detection, recognition, and overlay application.
+# Handles face detection, recognition, tracking, and overlay application.
 
 import cv2
 import numpy as np
@@ -7,6 +7,9 @@ import os
 import threading
 import time
 import random
+import torch
+
+from bytetracker import BYTETracker
 
 from modules.profiler.recognition import (
     RecognitionDB, LIVE_ENROLL_DESIGNATIONS, LIVE_ENROLL_WEIGHTS
@@ -28,6 +31,19 @@ OVERLAY_DIR = os.path.join('assets', 'overlay')
 ANTISPOOF_WEIGHTS = os.path.join('assets', 'antispoof', 'MiniFASNetV2.onnx')
 AUTO_ENROLL_SECONDS = 3.0
 
+# Re-identify a tracked face every N seconds
+REIDENTIFY_INTERVAL = 2.0
+
+
+def _make_tracker():
+    """Create a fresh BYTETracker instance."""
+    return BYTETracker(
+        track_thresh=0.5,
+        track_buffer=30,
+        match_thresh=0.8,
+        frame_rate=30
+    )
+
 
 class Designator:
     def __init__(self, app, db: RecognitionDB):
@@ -35,13 +51,22 @@ class Designator:
         self.db = db
         self._overlays = self._load_overlays()
 
+        # Detection thread state
         self._pending_frame = None
         self._pending_feed_id = 0
-        self._latest_results = []   # list of dicts: {bbox, ssn, designation, embedding, face_age, face_sex}
+        self._latest_results = []   # list of dicts: {bbox, ssn, designation, track_id, face_age, face_sex}
         self._visible_ssns = set()
         self._lock = threading.Lock()
 
-        self._tracking = {}
+        # ByteTracker — one per feed
+        self._trackers = {}         # {feed_id: BYTETracker}
+
+        # Track → identity binding: {track_id: {ssn, designation, last_identified, face_age, face_sex}}
+        self._track_identities = {}
+
+        # Tracks waiting for auto-enrollment: {track_id: {first_seen, embedding}}
+        self._pending_enrollment = {}
+
         self._debug_role = None
 
         self.antispoof = AntiSpoofModel(
@@ -95,112 +120,174 @@ class Designator:
                 time.sleep(0.01)
                 continue
 
+            # Get or create tracker for this feed
+            if feed_id not in self._trackers:
+                self._trackers[feed_id] = _make_tracker()
+            tracker = self._trackers[feed_id]
+
             try:
                 faces = self.app.get(frame)
             except Exception:
                 faces = []
 
+            now = time.time()
+            h, w = frame.shape[:2]
+
+            # Build detection array for ByteTrack: [x1, y1, x2, y2, score]
+            detections = []
+            face_data = []  # parallel list of face attributes
+            for face in faces:
+                bbox = face.bbox.astype(float)
+                score = float(getattr(face, 'det_score', 1.0))
+                cls = 0.0
+                detections.append([bbox[0], bbox[1], bbox[2], bbox[3], score, cls])
+                face_data.append({
+                    'embedding': face.embedding,
+                    'face_age':  getattr(face, 'age', None),
+                    'face_sex':  getattr(face, 'sex', None),
+                    'bbox':      face.bbox.astype(int),
+                })
+
+            if detections:
+                dets_np = np.array(detections, dtype=np.float32)
+                dets_t = torch.tensor(dets_np, dtype=torch.float32)
+                online_targets = tracker.update(dets_t, [h, w])
+            else:
+                # Feed empty detections to keep tracks updated
+                online_targets = tracker.update(
+                    torch.empty((0, 6), dtype=torch.float32), [h, w]
+                )
+
+            # Match ByteTrack targets back to InsightFace detections by IoU
             results = []
             visible = set()
-            now = time.time()
 
-            for face in faces:
-                bbox = face.bbox.astype(int)
-                embedding = face.embedding
-                face_age = getattr(face, 'age', None)
-                face_sex = getattr(face, 'sex', None)
+            for target in online_targets:
+                # BYTETracker returns rows of [x1, y1, x2, y2, track_id, cls, score]
+                tx1, ty1, tx2, ty2 = int(target[0]), int(target[1]), int(target[2]), int(target[3])
+                track_id = int(target[4])
+                tracked_bbox = np.array([tx1, ty1, tx2, ty2])
 
-                if embedding is None:
-                    results.append({
-                        'bbox': bbox,
-                        'ssn': None,
-                        'designation': DEFAULT_ROLE,
-                        'embedding': None,
-                        'face_age': face_age,
-                        'face_sex': face_sex,
-                    })
-                    continue
+                # Find best matching InsightFace detection by IoU
+                best_idx = self._match_detection(tracked_bbox, face_data)
+                embedding = face_data[best_idx]['embedding'] if best_idx is not None else None
+                face_age  = face_data[best_idx]['face_age']  if best_idx is not None else None
+                face_sex  = face_data[best_idx]['face_sex']  if best_idx is not None else None
 
-                match = self.db.identify(embedding)
+                # Look up or refresh identity for this track
+                identity = self._track_identities.get(track_id)
+                should_identify = (
+                    embedding is not None and (
+                        identity is None or
+                        now - identity.get('last_identified', 0) > REIDENTIFY_INTERVAL
+                    )
+                )
 
-                if match:
-                    ssn, name, designation, sim = match
-                    self.db.update_last_seen(ssn, feed_id)
-                    # Save last seen face crop
-                    visible.add(ssn)
-                    results.append({
-                        'bbox': bbox,
-                        'ssn': ssn,
-                        'designation': designation,
-                        'embedding': embedding,
-                        'face_age': face_age,
-                        'face_sex': face_sex,
-                    })
-                    tracking_key = self._find_tracking_key(embedding)
-                    if tracking_key:
-                        del self._tracking[tracking_key]
-                else:
-                    tracking_key = self._find_tracking_key(embedding)
-                    if tracking_key is None:
-                        tracking_key = id(embedding)
-                        self._tracking[tracking_key] = {
-                            'first_seen': now,
-                            'embedding': embedding,
-                            'feed_id': feed_id,
-                            'bbox': bbox
+                if should_identify:
+                    match = self.db.identify(embedding)
+                    if match:
+                        ssn, name, designation, sim = match
+                        self.db.update_last_seen(ssn, feed_id)
+                        self._track_identities[track_id] = {
+                            'ssn':             ssn,
+                            'designation':     designation,
+                            'last_identified': now,
+                            'face_age':        face_age,
+                            'face_sex':        face_sex,
                         }
+                        # Remove from pending enrollment if it was there
+                        self._pending_enrollment.pop(track_id, None)
                     else:
-                        self._tracking[tracking_key]['bbox'] = bbox
-                        elapsed = now - self._tracking[tracking_key]['first_seen']
+                        # Unknown face — track for auto-enrollment
+                        if track_id not in self._pending_enrollment:
+                            self._pending_enrollment[track_id] = {
+                                'first_seen': now,
+                                'embedding':  embedding,
+                            }
+                        else:
+                            elapsed = now - self._pending_enrollment[track_id]['first_seen']
+                            if elapsed >= AUTO_ENROLL_SECONDS:
+                                designation = random.choices(
+                                    LIVE_ENROLL_DESIGNATIONS,
+                                    weights=LIVE_ENROLL_WEIGHTS
+                                )[0]
+                                ssn = self.db.enroll(embedding, designation=designation)
+                                from modules.profiler.recognition import save_enrolled_image
+                                save_enrolled_image(ssn, frame, tracked_bbox)
+                                print(f"[Designator] Auto-enrolled {ssn} as {designation} (track {track_id})")
+                                self._track_identities[track_id] = {
+                                    'ssn':             ssn,
+                                    'designation':     designation,
+                                    'last_identified': now,
+                                    'face_age':        face_age,
+                                    'face_sex':        face_sex,
+                                }
+                                del self._pending_enrollment[track_id]
 
-                        if elapsed >= AUTO_ENROLL_SECONDS:
-                            designation = random.choices(
-                                LIVE_ENROLL_DESIGNATIONS,
-                                weights=LIVE_ENROLL_WEIGHTS
-                            )[0]
-                            ssn = self.db.enroll(
-                                embedding,
-                                designation=designation,
-                            )
-                            from modules.profiler.recognition import save_enrolled_image
-                            save_enrolled_image(ssn, frame, bbox);
-                            print(f"[Designator] Auto-enrolled {ssn} as {designation}")
-                            del self._tracking[tracking_key]
-                            visible.add(ssn)
-                            results.append({
-                                'bbox': bbox,
-                                'ssn': ssn,
-                                'designation': designation,
-                                'embedding': embedding,
-                                'face_age': face_age,
-                                'face_sex': face_sex,
-                            })
-                            continue
+                # Use whatever identity we have for this track (may be None if not yet identified)
+                identity = self._track_identities.get(track_id)
+                if identity:
+                    ssn         = identity['ssn']
+                    designation = identity['designation']
+                    face_age    = identity.get('face_age')
+                    face_sex    = identity.get('face_sex')
+                    visible.add(ssn)
+                else:
+                    ssn         = None
+                    designation = DEFAULT_ROLE
 
-                    results.append({
-                        'bbox': bbox,
-                        'ssn': None,
-                        'designation': DEFAULT_ROLE,
-                        'embedding': embedding,
-                        'face_age': face_age,
-                        'face_sex': face_sex,
-                    })
+                results.append({
+                    'bbox':        tracked_bbox,
+                    'track_id':    track_id,
+                    'ssn':         ssn,
+                    'designation': designation,
+                    'embedding':   embedding,
+                    'face_age':    face_age,
+                    'face_sex':    face_sex,
+                })
 
-            self._tracking = {
-                k: v for k, v in self._tracking.items()
-                if now - v['first_seen'] < AUTO_ENROLL_SECONDS * 3
-            }
+            # Clean up identities for tracks that are no longer active
+            active_ids = {int(t[4]) for t in online_targets}
+            stale = [tid for tid in self._track_identities if tid not in active_ids]
+            for tid in stale:
+                del self._track_identities[tid]
+
+            # Clean up pending enrollment for lost tracks
+            stale_enroll = [tid for tid in self._pending_enrollment if tid not in active_ids]
+            for tid in stale_enroll:
+                del self._pending_enrollment[tid]
 
             with self._lock:
                 self._latest_results = results
                 self._visible_ssns = visible
 
-    def _find_tracking_key(self, embedding, threshold=0.6):
-        from modules.profiler.recognition import _cosine_similarity
-        for key, data in self._tracking.items():
-            if _cosine_similarity(data['embedding'], embedding) > threshold:
-                return key
-        return None
+    def _match_detection(self, tracked_bbox, face_data, iou_threshold=0.3):
+        """Find the InsightFace detection that best matches a tracked bbox by IoU."""
+        if not face_data:
+            return None
+        best_iou = iou_threshold
+        best_idx = None
+        for i, fd in enumerate(face_data):
+            iou = self._bbox_iou(tracked_bbox, fd['bbox'])
+            if iou > best_iou:
+                best_iou = iou
+                best_idx = i
+        return best_idx
+
+    def _bbox_iou(self, a, b):
+        """Compute IoU between two bboxes [x1,y1,x2,y2]."""
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if inter == 0:
+            return 0.0
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        return inter / (area_a + area_b - inter)
 
     # -------------------------------------------------------------------------
     # Frame processing
@@ -271,7 +358,7 @@ class Designator:
         frame[fy1:fy2, fx1:fx2] = roi
 
         return frame
-    
+
     def request_auth_check(self, ssn):
         with self._lock:
             self._auth_request_ssn = ssn
