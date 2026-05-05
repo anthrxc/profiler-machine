@@ -5,14 +5,16 @@ import cv2
 import math
 import time
 import os
+import random
+import threading
 import numpy as np
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QScrollArea, QLineEdit, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QImage, QPixmap
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QFont, QImage, QPixmap, QColor, QPainter
 
 from modules.profiler.recognition import DESIGNATIONS, IMAGES_DIR
 from modules.ui.profiler_panel import ProfilerPanel, PANEL_W
@@ -377,6 +379,7 @@ class ConsoleWidget(QWidget):
         elif primary == "help":
             self._print("using <SSN> | quit | fullscreen | overlay [role]")
             self._print("feed [add/remove/focus/grid/list]")
+            self._print("alert [add/remove/list/mute/unmute]  —  add: designation|co-presence|ssn")
             self._print("profiler [toggle/start/stop/show/enroll/remove/update/list/info]")
 
         elif primary == "fullscreen":
@@ -392,6 +395,12 @@ class ConsoleWidget(QWidget):
                 return
             success = self.feed_manager._designator.set_debug_role(args[0].lower())
             self._print(f"Debug overlay: {args[0]}" if success else f"Unknown role: '{args[0]}'", ok=success)
+
+        elif primary == "alert":
+            if not args:
+                self._print("Usage: alert [add/remove/list/mute/unmute]", ok=False)
+                return
+            self._handle_alert(args)
 
         elif primary == "feed":
             if not args:
@@ -429,32 +438,25 @@ class ConsoleWidget(QWidget):
             self._print("Running liveness check...")
             designator = self.feed_manager._designator
             with designator._lock:
-                results_by_feed = {
-                    fid: list(feed_results)
-                    for fid, feed_results in designator._latest_results.items()
-                }
-
+                # _latest_results is now {feed_id: [results]} — flatten all feeds
+                all_results = []
+                for feed_results in designator._latest_results.values():
+                    all_results.extend(feed_results)
+            # Find the bbox for this SSN
             bbox = None
-            matched_feed_id = None
-            for fid, feed_results in results_by_feed.items():
-                for r in feed_results:
-                    if r.get('ssn') == ssn:
-                        bbox = r.get('bbox')
-                        matched_feed_id = fid
-                        break
-                if bbox is not None:
+            for r in all_results:
+                if r.get('ssn') == ssn:
+                    bbox = r.get('bbox')
                     break
-
             if bbox is None:
                 self._print("Authentication failed — could not locate face in frame.", ok=False)
                 return
-
+            # Get the latest raw frame
             frames = self.feed_manager.get_raw_frames()
-            frame = frames.get(matched_feed_id)
+            frame = next(iter(frames.values()), None) if frames else None
             if frame is None:
                 self._print("Authentication failed — no frame available.", ok=False)
                 return
-
             result = self._antispoof.predict_from_bbox(frame, bbox)
             if not result['ok']:
                 self._print("Authentication failed — liveness check error.", ok=False)
@@ -467,6 +469,83 @@ class ConsoleWidget(QWidget):
         self._active_user_ssn = ssn
         self._last_seen_time = None
         self._print(f"Authenticated as {person[2] or ssn} [{person[3].upper()}].")
+
+    def _handle_alert(self, args):
+        from modules.profiler.alerts import parse_condition, ALERT_SOUND_PATH
+        engine = self.feed_manager._alert_engine
+        sub    = args[0].lower()
+        rest   = args[1:]
+
+        if sub == "add":
+            if not rest:
+                self._print(
+                    "Usage: alert add <designation <role>> | "
+                    "<co-presence <role_a> <role_b>> | <ssn <SSN>>",
+                    ok=False
+                )
+                return
+            try:
+                cond = parse_condition(rest)
+                created_by = getattr(self, '_active_user_ssn', None)
+                rule = engine.add_rule(cond, created_by=created_by)
+                self._print(
+                    f"Alert rule {rule.rule_id} added: {rule.condition.describe()}"
+                )
+            except ValueError as e:
+                self._print(str(e), ok=False)
+
+        elif sub == "remove":
+            if not rest or not rest[0].isdigit():
+                self._print("Usage: alert remove <rule ID>", ok=False)
+                return
+            rid = int(rest[0])
+            if engine.remove_rule(rid):
+                self._print(f"Alert rule {rid} removed.")
+            else:
+                self._print(f"No alert rule with ID {rid}.", ok=False)
+
+        elif sub == "list":
+            rules = engine.list_rules()
+            if not rules:
+                self._print("No alert rules defined.")
+                return
+            self._print(f"{len(rules)} rule(s):")
+            for r in rules:
+                mute_tag = "  [MUTED]" if r.muted else ""
+                self._print(
+                    f"  [{r.rule_id}]  {r.condition.describe()}{mute_tag}"
+                )
+
+        elif sub == "mute":
+            if not rest:
+                engine.mute_all()
+                self._print("All alerts muted.")
+                return
+            if not rest[0].isdigit():
+                self._print("Usage: alert mute [rule ID]", ok=False)
+                return
+            rid = int(rest[0])
+            if engine.mute_rule(rid):
+                self._print(f"Alert rule {rid} muted.")
+            else:
+                self._print(f"No alert rule with ID {rid}.", ok=False)
+
+        elif sub == "unmute":
+            if not rest:
+                engine.unmute_all()
+                self._print("All alerts unmuted.")
+                return
+            if not rest[0].isdigit():
+                self._print("Usage: alert unmute [rule ID]", ok=False)
+                return
+            rid = int(rest[0])
+            if engine.unmute_rule(rid):
+                self._print(f"Alert rule {rid} unmuted.")
+            else:
+                self._print(f"No alert rule with ID {rid}.", ok=False)
+
+        else:
+            self._print(f"Unknown alert command: '{sub}'", ok=False)
 
     def _handle_feed(self, args):
         sub = args[0].lower()
@@ -613,6 +692,513 @@ class ConsoleWidget(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Alert window
+# ─────────────────────────────────────────────────────────────────────────────
+
+ALERT_CARD_W = 520
+ALERT_CARD_H = 190
+ALERT_CARD_GAP = 6
+ALERT_MAX_VISIBLE_CARDS = 3
+ALERT_DISPLAY_SECONDS = 5.0
+
+
+class AlertCard(QWidget):
+    """
+    A single alert card rendered from assets/gui/infocards/alert.png.
+    The text placement matches the mockups in assets/gui/infocards/examples/.
+    """
+
+    def __init__(self, alert, parent=None):
+        super().__init__(parent)
+        self._alert = alert
+        self.setFixedSize(ALERT_CARD_W, ALERT_CARD_H)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._build_ui()
+
+    def _make_label(self, text, x, y, w, h, *, bold=False, size=18):
+        lbl = QLabel(text, self)
+        lbl.setGeometry(x, y, w, h)
+        lbl.setStyleSheet(
+            "color: #000000; "
+            "font-family: 'Courier New', monospace; "
+            f"font-size: {size}px; "
+            f"font-weight: {'bold' if bold else 'normal'}; "
+            "background: transparent;"
+        )
+        lbl.setWordWrap(False)
+        return lbl
+
+    def _build_ui(self):
+        alert = self._alert
+
+        template_path = os.path.join('assets', 'gui', 'infocards', 'alert.png')
+        bg = QLabel(self)
+        bg.setGeometry(0, 0, ALERT_CARD_W, ALERT_CARD_H)
+        if os.path.exists(template_path):
+            bg.setPixmap(QPixmap(template_path))
+            bg.setScaledContents(True)
+        else:
+            bg.setStyleSheet('background-color: #cc0000; border-top: 15px solid #000000;')
+
+        title = QLabel(f"! ALERT ENGINE - RULE {alert.rule.rule_id} TRIGGERED", self)
+        title.setGeometry(6, 0, ALERT_CARD_W - 12, 24)
+        title.setStyleSheet(
+            "color: #ff0000; font-family: 'Courier New', monospace; "
+            "font-size: 17px; font-weight: bold; background: transparent;"
+        )
+
+        subjects = getattr(alert, 'subjects', []) or []
+        is_copresence = len(subjects) >= 2
+
+        if is_copresence:
+            a_name, a_ssn, a_desig = subjects[0]
+            b_name, b_ssn, b_desig = subjects[1]
+            self._make_label(f"{a_name.upper()} ({a_ssn})  IN FEED {alert.feed_id}", 8, 32, ALERT_CARD_W - 16, 26, bold=True, size=20)
+            self._make_label(f"DESIGNATION: {a_desig.upper()}", 8, 60, ALERT_CARD_W - 16, 24, size=18)
+            self._make_label(f"{b_name.upper()} ({b_ssn})  IN FEED {alert.feed_id}", 8, 92, ALERT_CARD_W - 16, 26, bold=True, size=20)
+            self._make_label(f"DESIGNATION: {b_desig.upper()}", 8, 120, ALERT_CARD_W - 16, 24, size=18)
+        elif subjects:
+            name, ssn, desig = subjects[0]
+            self._make_label(f"{name.upper()} ({ssn})  IN FEED {alert.feed_id}", 8, 38, ALERT_CARD_W - 16, 30, bold=True, size=22)
+            self._make_label(f"DESIGNATION: {desig.upper()}", 8, 76, ALERT_CARD_W - 16, 28, size=20)
+        else:
+            self._make_label(f"{getattr(alert, 'label', 'ALERT').upper()}  IN FEED {alert.feed_id}", 8, 38, ALERT_CARD_W - 16, 32, bold=True, size=22)
+
+        alert_type = alert.rule.condition.describe().split(':', 1)[0].upper()
+        created_by = getattr(alert, 'created_by_name', 'UNKNOWN')
+        self._make_label(f"{alert_type} ALERT ADDED BY {str(created_by).upper()}", 8, 164, ALERT_CARD_W - 16, 22, bold=True, size=16)
+
+
+class AlertWindow(QWidget):
+    """
+    Floating alert window beside the main app.
+    Shows up to 3 cards without scrolling; 4+ active alerts become scrollable.
+    """
+
+    def __init__(self):
+        super().__init__(None)
+        self._entries = []  # [{'uid': int, 'alert': ActiveAlert, 'card': AlertCard, 'born_at': float}]
+        self._seen_ids = set()
+        self._anchor_x = 0
+        self._anchor_y = 0
+
+        self.setWindowFlags(
+            Qt.FramelessWindowHint |
+            Qt.WindowStaysOnTopHint |
+            Qt.Tool
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setFixedWidth(ALERT_CARD_W + 18)
+
+        self._outer_layout = QVBoxLayout(self)
+        self._outer_layout.setContentsMargins(0, 0, 0, 0)
+        self._outer_layout.setSpacing(0)
+
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollArea > QWidget > QWidget { background: transparent; }
+            QScrollBar:vertical { background: #220000; width: 8px; }
+            QScrollBar::handle:vertical { background: #880000; min-height: 20px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+
+        self._content = QWidget()
+        self._content.setStyleSheet("background: transparent;")
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(ALERT_CARD_GAP)
+        self._scroll.setWidget(self._content)
+        self._outer_layout.addWidget(self._scroll)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(100)
+
+    def anchor_to(self, main_window):
+        geo = main_window.frameGeometry()
+        self._anchor_x = geo.right() + 8
+        self._anchor_y = geo.top()
+        self.move(self._anchor_x, self._anchor_y)
+
+    def push_alerts(self, active_alerts: list):
+        now = time.time()
+        added = False
+
+        for alert in active_alerts:
+            uid = id(alert)
+            if uid in self._seen_ids:
+                continue
+
+            self._seen_ids.add(uid)
+            card = AlertCard(alert, self._content)
+            self._content_layout.addWidget(card)
+            self._entries.append({
+                'uid': uid,
+                'alert': alert,
+                'card': card,
+                'born_at': getattr(alert, 'born_at', now),
+            })
+            added = True
+
+        if added:
+            self._refresh_window()
+
+    def _tick(self):
+        now = time.time()
+        kept = []
+
+        for entry in self._entries:
+            if now - entry['born_at'] >= ALERT_DISPLAY_SECONDS:
+                entry['card'].setParent(None)
+                entry['card'].deleteLater()
+                self._seen_ids.discard(entry['uid'])
+            else:
+                kept.append(entry)
+
+        if len(kept) != len(self._entries):
+            self._entries = kept
+            self._refresh_window()
+
+    def _refresh_window(self):
+        count = len(self._entries)
+        if count <= 0:
+            self.hide()
+            return
+
+        visible_count = min(count, ALERT_MAX_VISIBLE_CARDS)
+        height = (visible_count * ALERT_CARD_H) + ((visible_count - 1) * ALERT_CARD_GAP)
+        self.setFixedHeight(height)
+        self._scroll.setFixedHeight(height)
+
+        # 1-3 alerts: no scrollbar. 4+ alerts: scrolling list of active alerts.
+        if count <= ALERT_MAX_VISIBLE_CARDS:
+            self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        else:
+            self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.move(self._anchor_x, self._anchor_y)
+        self.show()
+        self.raise_()
+
+    def close(self):
+        for entry in self._entries:
+            entry['card'].close()
+        self._entries.clear()
+        self.hide()
+        super().close()
+
+# Main window
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Intro sequence
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GLITCH_CHARS = "█▓▒░╔╗╚╝║═╠╣╦╩╬▲▼◄►◆○●□■"
+
+def _fake_coord():
+    lat  = f"{random.uniform(-90, 90):+.5f}"
+    lon  = f"{random.uniform(-180, 180):+.5f}"
+    return f"{lat} / {lon}"
+
+def _fake_hex(n=16):
+    return ' '.join(f'{random.randint(0,255):02X}' for _ in range(n))
+
+def _fake_signal():
+    return f"{random.randint(72, 99)}%"
+
+def _glitch_line(length=60):
+    return ''.join(random.choice(_GLITCH_CHARS) for _ in range(length))
+
+
+class IntroLine:
+    """One rendered row in the intro terminal."""
+    def __init__(self, text, color, bold=False, indent=0):
+        self.text   = text
+        self.color  = color   # hex string
+        self.bold   = bold
+        self.indent = indent
+
+
+class IntroSequence(QWidget):
+    """
+    Full-window terminal intro that plays over MainWindow on first launch.
+    Three acts:
+      Act 1 — feed uplink (one block per active camera)
+      Act 2 — system scan readout
+      Act 3 — operator identity confirm
+    Emits `finished` when done so MainWindow can start its feed timer.
+    """
+    finished = pyqtSignal()
+
+    # Timing knobs (milliseconds)
+    _TICK           = 40    # base repaint interval
+    _LINE_DELAY     = 55    # ms between lines appearing
+    _GLITCH_FRAMES  = 6     # frames a glitch line stays before resolving
+    _ACT_GAP        = 420   # pause between acts
+    _HOLD_FINAL     = 1800  # hold "PROFILER MACHINE ONLINE" before fade
+    _FADE_STEPS     = 20    # opacity steps for fade-out
+
+    def __init__(self, parent, feed_manager, db):
+        super().__init__(parent)
+        self._feed_manager = feed_manager
+        self._db           = db
+
+        self._lines        = []          # list[IntroLine] — fully revealed lines
+        self._pending      = []          # queue of (delay_ms, IntroLine)
+        self._glitch_text  = None        # current glitch line or None
+        self._glitch_ttl   = 0
+        self._opacity      = 255
+        self._fading       = False
+        self._done         = False
+        self._elapsed_debt = 0           # accumulates ms between scheduled lines
+
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setGeometry(parent.rect())
+        self.raise_()
+        self.show()
+
+        # Build script in background so DB call doesn't block the UI thread
+        threading.Thread(target=self._build_and_start, daemon=True).start()
+
+        self._tick_timer = QTimer(self)
+        self._tick_timer.timeout.connect(self._tick)
+        self._tick_timer.start(self._TICK)
+
+    # ------------------------------------------------------------------ build
+
+    def _build_and_start(self):
+        """Build the full line script then hand it to the main thread via pending queue."""
+        pending = []   # list of (cumulative_delay_ms, IntroLine)
+        t = 0          # cursor in ms
+
+        def line(text, color="#cccccc", bold=False, indent=0, delay=None):
+            nonlocal t
+            d = delay if delay is not None else self._LINE_DELAY
+            t += d
+            pending.append((t, IntroLine(text, color, bold, indent)))
+
+        def blank(delay=80):
+            line("", "#000000", delay=delay)
+
+        # ── HEADER ──────────────────────────────────────────────────────────
+        line("",        delay=0)
+        line("╔" + "═"*66 + "╗", "#1a4a1a", delay=120)
+        line("║  P R O F I L E R   M A C H I N E   //   S Y S T E M   B O O T    ║", "#22cc22", bold=True, delay=80)
+        line("╚" + "═"*66 + "╝", "#1a4a1a", delay=80)
+        blank(200)
+
+        # ── ACT 1: FEED UPLINK ───────────────────────────────────────────────
+        line("[ ACT I ]  ESTABLISHING UPLINKS", "#555555", delay=self._ACT_GAP)
+        line("─"*68, "#1a3a1a", delay=60)
+        blank(80)
+
+        feed_ids = self._feed_manager.list_feeds()
+        if not feed_ids:
+            feed_ids = [0]
+
+        for fid in feed_ids:
+            tag = f"CAM-{fid:02d}"
+            coord = _fake_coord()
+            sig   = _fake_signal()
+
+            line(f"  UPLINK  {tag}", "#888888", delay=180)
+            # glitch sentinel — negative delay means "show glitch before this"
+            t += 220
+            pending.append((t, IntroLine("__GLITCH__", "#333333")))
+            t += 260
+            pending.append((t, IntroLine("__GLITCH__", "#333333")))
+            line(f"  {tag}   COORDINATES  {coord}", "#446644", delay=200)
+            line(f"  {tag}   SIGNAL       {sig}  ▉▉▉▉▉▉▉▉░░", "#446644", delay=80)
+            line(f"  {tag}   ENCRYPTION   AES-256-GCM / ECDH-P384", "#446644", delay=80)
+            line(f"  {tag}   STATUS       ██ ONLINE", "#22cc22", bold=True, delay=80)
+            blank(120)
+
+        # ── ACT 2: SYSTEM SCAN ───────────────────────────────────────────────
+        line("[ ACT II ]  SYSTEM SCAN", "#555555", delay=self._ACT_GAP)
+        line("─"*68, "#1a3a1a", delay=60)
+        blank(80)
+
+        person_count = 0
+        try:
+            person_count = self._db.count()
+        except Exception:
+            pass
+
+        threat_count = 0
+        try:
+            all_persons = self._db.get_all()
+            threat_count = sum(1 for p in all_persons if p[3] in ('threat', 'perpetrator'))
+        except Exception:
+            pass
+
+        scan_lines = [
+            ("PERSONS ON RECORD",    f"{person_count}",                         "#cccccc"),
+            ("THREAT INDEX",         f"{threat_count} FLAGGED SUBJECT(S)",      "#ff6644" if threat_count else "#cccccc"),
+            ("FACIAL MODEL",         "INSIGHTFACE  buffalo_l  [GPU]",            "#cccccc"),
+            ("ANTI-SPOOF",           "MiniFASNetV2  ONNX  [ACTIVE]",             "#cccccc"),
+            ("TRACKER",              "BYTETRACK  v0.3  [ACTIVE]",                "#cccccc"),
+            ("UPLINK PROTOCOL",      "TLS 1.3 / SRTP",                           "#cccccc"),
+            ("JURISDICTION",         "UNRESTRICTED",                             "#ff4444"),
+            ("CLASSIFICATION",       "TS//SCI//PROFM",                           "#ff4444"),
+            ("KERNEL",               _fake_hex(8),                               "#335533"),
+            ("INTEGRITY HASH",       _fake_hex(12),                              "#335533"),
+        ]
+
+        max_key = max(len(k) for k, _, _ in scan_lines)
+        for key, val, col in scan_lines:
+            dots = "." * (max_key - len(key) + 4)
+            line(f"  {key}{dots}{val}", col, delay=self._LINE_DELAY + random.randint(0, 40))
+
+        blank(100)
+        line("  ALL SUBSYSTEMS  ██ NOMINAL", "#22cc22", bold=True, delay=180)
+        blank(80)
+
+        # ── ACT 3: OPERATOR IDENTITY ─────────────────────────────────────────
+        line("[ ACT III ]  OPERATOR AUTHENTICATION", "#555555", delay=self._ACT_GAP)
+        line("─"*68, "#1a3a1a", delay=60)
+        blank(80)
+
+        operator_name  = "UNIDENTIFIED"
+        operator_level = "GUEST"
+        operator_ssn   = "???-??-????"
+        try:
+            all_p = self._db.get_all()
+            roots = [p for p in all_p if p[3] == 'root']
+            if roots:
+                p = roots[0]
+                operator_ssn   = p[1]
+                operator_name  = (p[2] or "UNKNOWN").upper()
+                operator_level = "ROOT"
+            else:
+                admins = [p for p in all_p if p[3] == 'admin']
+                if admins:
+                    p = admins[0]
+                    operator_ssn   = p[1]
+                    operator_name  = (p[2] or "UNKNOWN").upper()
+                    operator_level = "ADMIN"
+        except Exception:
+            pass
+
+        id_col = "#22cc22" if operator_level in ("ROOT", "ADMIN") else "#888888"
+
+        line(f"  OPERATOR ID ........ {operator_ssn}",   id_col, delay=220)
+        line(f"  OPERATOR NAME ...... {operator_name}",  id_col, delay=160, bold=True)
+        line(f"  CLEARANCE .......... {operator_level}", id_col, delay=160)
+        blank(120)
+
+        if operator_level == "ROOT":
+            line("  ██ FULL SYSTEM ACCESS GRANTED", "#22cc22", bold=True, delay=220)
+        elif operator_level == "ADMIN":
+            line("  ██ ELEVATED ACCESS GRANTED", "#22cc22", bold=True, delay=220)
+        else:
+            line("  ░░ LIMITED ACCESS — AUTHENTICATE TO CONTINUE", "#888888", delay=220)
+
+        blank(200)
+
+        # ── FINAL BANNER ─────────────────────────────────────────────────────
+        line("╔" + "═"*66 + "╗", "#1a4a1a", delay=self._ACT_GAP)
+        line("║" + " "*18 + "P R O F I L E R   M A C H I N E" + " "*17 + "║", "#22cc22", bold=True, delay=100)
+        line("║" + " "*26 + "O N L I N E" + " "*29 + "║",                      "#22cc22", bold=True, delay=100)
+        line("╚" + "═"*66 + "╝", "#1a4a1a", delay=100)
+
+        # sentinel: start fade after hold
+        t += self._HOLD_FINAL
+        pending.append((t, IntroLine("__FADE__", "#000000")))
+
+        self._pending = pending
+
+    # ------------------------------------------------------------------ tick
+
+    def _tick(self):
+        if self._done:
+            return
+
+        if self._fading:
+            self._opacity = max(0, self._opacity - (255 // self._FADE_STEPS))
+            self.update()
+            if self._opacity == 0:
+                self._tick_timer.stop()
+                self._done = True
+                self.hide()
+                self.finished.emit()
+            return
+
+        self._elapsed_debt += self._TICK
+
+        # Drain any pending lines whose time has come
+        while self._pending and self._pending[0][0] <= self._elapsed_debt:
+            _, intro_line = self._pending.pop(0)
+
+            if intro_line.text == "__GLITCH__":
+                self._glitch_text = _glitch_line()
+                self._glitch_ttl  = self._GLITCH_FRAMES
+            elif intro_line.text == "__FADE__":
+                self._fading = True
+                break
+            else:
+                self._lines.append(intro_line)
+
+        # Age glitch
+        if self._glitch_ttl > 0:
+            self._glitch_ttl -= 1
+            if self._glitch_ttl == 0:
+                self._glitch_text = None
+
+        self.update()
+
+    # ------------------------------------------------------------------ paint
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setOpacity(self._opacity / 255.0)
+
+        # Background
+        painter.fillRect(self.rect(), QColor(0, 0, 0))
+
+        font_normal = QFont("Courier New", 10)
+        font_bold   = QFont("Courier New", 10)
+        font_bold.setBold(True)
+
+        fm      = painter.fontMetrics()
+        line_h  = fm.height() + 3
+        margin  = 60
+        y_start = 44
+
+        # How many lines fit on screen
+        visible_h  = self.height() - y_start - 20
+        max_lines  = visible_h // line_h
+
+        # Show only the last max_lines lines (scroll effect)
+        visible = self._lines[-max_lines:] if len(self._lines) > max_lines else self._lines
+
+        y = y_start
+        for il in visible:
+            painter.setFont(font_bold if il.bold else font_normal)
+            painter.setPen(QColor(il.color))
+            painter.drawText(margin + il.indent, y, il.text)
+            y += line_h
+
+        # Glitch line at cursor position
+        if self._glitch_text:
+            painter.setFont(font_normal)
+            painter.setPen(QColor("#1a3a1a"))
+            painter.drawText(margin, y, self._glitch_text)
+
+        painter.end()
+
+    def resizeEvent(self, event):
+        self.setGeometry(self.parent().rect())
+        super().resizeEvent(event)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main window
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -627,8 +1213,21 @@ class MainWindow(QWidget):
 
         self._init_ui()
 
+        # Give the alert engine a console callback now that the console exists
+        self.feed_manager.set_console(self._console._print)
+
+        # Floating alert window
+        self._alert_window = AlertWindow()
+
+        # Intro plays first — feed timer starts only after it finishes
+        self._intro = IntroSequence(self, feed_manager, db)
+        self._intro.finished.connect(self._on_intro_finished)
+
         self._feed_timer = QTimer()
         self._feed_timer.timeout.connect(self._refresh_feed)
+        # Feed timer is NOT started here — _on_intro_finished starts it
+
+    def _on_intro_finished(self):
         self._feed_timer.start(33)
 
     def _init_ui(self):
@@ -688,6 +1287,19 @@ class MainWindow(QWidget):
             self._is_fullscreen = True
 
     def _refresh_feed(self):
+        # Drain alert console messages queued from the background thread
+        self.feed_manager._alert_engine.flush_console_queue()
+
+        # Push all active alerts to the floating alert window
+        all_alerts = []
+        for fid in self.feed_manager.list_feeds():
+            all_alerts.extend(
+                self.feed_manager._alert_engine.get_active_alerts(fid)
+            )
+        if all_alerts:
+            self._alert_window.anchor_to(self)
+            self._alert_window.push_alerts(all_alerts)
+
         frames = self.feed_manager.get_frames()
         if not frames:
             self._feed_display.show_placeholder()
@@ -743,7 +1355,12 @@ class MainWindow(QWidget):
 
         return grid
 
+    def moveEvent(self, event):
+        self._alert_window.anchor_to(self)
+        super().moveEvent(event)
+
     def closeEvent(self, event):
+        self._alert_window.close()
         self._feed_timer.stop()
         self.feed_manager.stop()
         event.accept()

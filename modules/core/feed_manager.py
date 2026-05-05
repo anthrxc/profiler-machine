@@ -4,6 +4,7 @@
 import threading
 from modules.io.videostream import VideoStream
 from modules.profiler.designation import Designator
+from modules.profiler.alerts import AlertEngine
 
 
 class FeedManager:
@@ -14,6 +15,31 @@ class FeedManager:
         self._lock = threading.Lock()
         self._focused = None
         self._designator = Designator(app, db)
+
+        # AlertEngine is started after console is ready (set_console called)
+        self._alert_engine = AlertEngine(
+            db=db,
+            designator=self._designator,
+            console_cb=self._console_print,
+            play_sound_cb=self._play_sound,
+        )
+        self._console_cb = None   # injected by MainWindow after construction
+
+    def set_console(self, cb):
+        """Called by MainWindow to inject the console print callback."""
+        self._console_cb = cb
+        self._alert_engine.start()
+
+    def _console_print(self, text, ok=True):
+        if self._console_cb:
+            self._console_cb(text, ok=ok)
+
+    def _play_sound(self, path):
+        try:
+            from modules.io.playsound import play_sound
+            play_sound(path)
+        except Exception as e:
+            print(f"[FeedManager] Sound error: {e}")
 
     # -------------------------------------------------------------------------
     # Feed management
@@ -54,7 +80,8 @@ class FeedManager:
             return list(self._feeds.keys())
 
     def stop(self):
-        """Stop all feeds and the detection thread."""
+        """Stop all feeds, detection thread, and alert engine."""
+        self._alert_engine.stop()
         self._designator.stop()
         with self._lock:
             for stream in self._feeds.values():
@@ -69,14 +96,15 @@ class FeedManager:
     # -------------------------------------------------------------------------
 
     def get_frames(self):
-        """Return a dict of {feed_id: frame} with overlays applied."""
+        """Return a dict of {feed_id: frame} with overlays and alert cards applied."""
         with self._lock:
             raw = {fid: (stream.get_frame(), fid) for fid, stream in self._feeds.items()}
 
         processed = {}
         for fid, (frame, feed_id) in raw.items():
             if frame is not None:
-                processed[fid] = self._designator.process_frame(frame, feed_id)
+                frame = self._designator.process_frame(frame, feed_id)
+                processed[fid] = frame
             else:
                 processed[fid] = None
 

@@ -155,40 +155,32 @@ class ProfilerPanel(QWidget):
 
         designator = self.feed_manager._designator
         with designator._lock:
-            results_by_feed = {
-                fid: list(feed_results)
-                for fid, feed_results in designator._latest_results.items()
-            }
-
-        visible_by_feed = {fid: [] for fid in self.feed_manager.list_feeds()}
-        results = []
-
-        for fid, feed_results in results_by_feed.items():
-            for result in feed_results:
-                results.append(result)
-                if result.get('ssn'):
-                    if fid in visible_by_feed:
-                        visible_by_feed[fid].append(result['ssn'])
+            # _latest_results is {feed_id: [result dicts]}
+            all_results = []
+            visible_by_feed = {}
+            for fid, feed_results in designator._latest_results.items():
+                visible_by_feed[fid] = []
+                for r in feed_results:
+                    all_results.append(r)
+                    if r.get('ssn'):
+                        visible_by_feed[fid].append(r['ssn'])
 
         self._update_crime_chances(visible_by_feed)
 
         if self._mode == 'single' and self._single_ssn:
             ssns_to_show = [self._single_ssn]
         elif self._mode == 'all':
-            ssns_to_show = [r['ssn'] for r in results if r.get('ssn')]
+            ssns_to_show = [r['ssn'] for r in all_results if r.get('ssn')]
         else:
             return
 
         if not ssns_to_show:
             self._clear_cards()
-            self._status.setText(
-                "  No faces detected." if self._mode == 'all'
-                else f"  {self._single_ssn} not in frame."
-            )
+            self._status.setText("  No faces detected." if self._mode == 'all' else f"  {self._single_ssn} not in frame.")
             return
 
         self._status.setText(f"  {len(ssns_to_show)} profile(s) active.")
-        self._render_cards(ssns_to_show, results, visible_by_feed)
+        self._render_cards(ssns_to_show, all_results, visible_by_feed)
 
     def _clear_cards(self):
         for widget in self._card_widgets.values():

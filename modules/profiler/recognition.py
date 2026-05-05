@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 from datetime import datetime
 
-DB_PATH         = os.path.join('database', 'facedb.sqlite')
+DB_PATH         = os.path.join('database', 'profm.sqlite')
 IMAGES_DIR      = os.path.join('database', 'enroll')
 ENROLLED_DIR    = os.path.join('database', 'enrolled')
 
