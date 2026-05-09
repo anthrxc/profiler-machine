@@ -89,7 +89,7 @@ def _truncate_text(draw, text, font, max_width):
     return text + "..."
 
 
-def render_card_with_face_data(person, face_age=None, face_sex=None, crime_chance=None):
+def render_card_with_face_data(person, face_age=None, face_sex=None, crime_chance=None, is_tracked=False):
     """
     Render an infocard for a person.
     person: (id, ssn, name, designation, notes, last_seen_ts, last_seen_feed)
@@ -99,6 +99,7 @@ def render_card_with_face_data(person, face_age=None, face_sex=None, crime_chanc
 
     font_sm   = _load_font(15)
     font_bold = _load_font_bold(18)
+    font_track = _load_font_bold(13)
 
     card = _load_card_template(designation)
     draw = ImageDraw.Draw(card)
@@ -114,6 +115,18 @@ def render_card_with_face_data(person, face_age=None, face_sex=None, crime_chanc
     # Crime % (victim/perpetrator only)
     if designation in ('victim', 'perpetrator') and crime_chance is not None:
         draw.text((CRIME_X, CRIME_Y), f"Crime: {crime_chance}%", font=font_sm, fill=TEXT_WHITE)
+
+    # TRACKING badge — amber pill top-right when actively tracked
+    if is_tracked:
+        badge_text = "LIVE TRACKING"
+        AMBER = (255, 165, 0)
+        bw = int(draw.textlength(badge_text, font=font_track)) + 10
+        bh = 18
+        bx = CARD_W - bw - 6
+        by = 6
+        draw.rectangle([(bx - 2, by), (bx + bw, by + bh)], fill=(30, 20, 0, 220))
+        draw.rectangle([(bx - 2, by), (bx + bw, by + bh)], outline=AMBER, width=1)
+        draw.text((bx + 3, by + 2), badge_text, font=font_track, fill=AMBER)
 
     # Description bar
     text_color = HIGHLIGHT_TEXT_COLOR.get(designation, (0, 0, 0))

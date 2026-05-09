@@ -71,6 +71,11 @@ class Designator:
 
         self._debug_role = None
 
+        # ── Cross-feed subject tracking ───────────────────────────────────────
+        self._tracked_ssn       = None   # SSN currently being tracked
+        self._tracked_last_feed = None   # last feed_id where subject was seen
+        # ─────────────────────────────────────────────────────────────────────
+
         self.antispoof = AntiSpoofModel(
             model_path=ANTISPOOF_WEIGHTS,
             scale=2.7
@@ -106,6 +111,33 @@ class Designator:
     def is_ssn_in_frame(self, ssn):
         with self._lock:
             return ssn in self._visible_ssns
+
+    # ── Cross-feed tracking API ───────────────────────────────────────────────
+
+    def set_tracked_ssn(self, ssn):
+        with self._lock:
+            self._tracked_ssn = ssn
+            self._tracked_last_feed = None
+
+    def clear_tracked_ssn(self):
+        with self._lock:
+            self._tracked_ssn = None
+            self._tracked_last_feed = None
+
+    def get_tracked_ssn(self):
+        with self._lock:
+            return self._tracked_ssn
+
+    def get_tracked_last_feed(self):
+        with self._lock:
+            return self._tracked_last_feed
+
+    def is_tracked_visible(self):
+        """Return True if the currently tracked subject appears in any feed."""
+        with self._lock:
+            return self._tracked_ssn is not None and self._tracked_ssn in self._visible_ssns
+
+    # ── End tracking API ──────────────────────────────────────────────────────
 
     # -------------------------------------------------------------------------
     # Detection loop
@@ -273,6 +305,9 @@ class Designator:
                         if r['ssn']:
                             all_visible.add(r['ssn'])
                 self._visible_ssns = all_visible
+                # Update last-known feed for the cross-feed tracked subject
+                if self._tracked_ssn and self._tracked_ssn in visible:
+                    self._tracked_last_feed = feed_id
 
     def _match_detection(self, tracked_bbox, face_data, iou_threshold=0.3):
         """Find the InsightFace detection that best matches a tracked bbox by IoU."""
@@ -313,10 +348,18 @@ class Designator:
                 self._feed_order.append(feed_id)
             self._pending_frames[feed_id] = frame.copy()
             results = list(self._latest_results.get(feed_id, []))
+            tracked_ssn = self._tracked_ssn   # snapshot under lock
 
         for result in results:
             role = self._debug_role or result['designation']
             frame = self._apply_overlay(frame, result['bbox'], role)
+
+        # Draw tracking label in designation colour next to the overlay
+        if tracked_ssn:
+            for result in results:
+                if result.get('ssn') == tracked_ssn:
+                    desig = self._debug_role or result['designation']
+                    self._draw_tracking_indicator(frame, result['bbox'], desig)
 
         return frame
 
@@ -373,6 +416,40 @@ class Designator:
         frame[fy1:fy2, fx1:fx2] = roi
 
         return frame
+
+    def _draw_tracking_indicator(self, frame, bbox, designation='irrelevant'):
+        """Draw 'TRACKING' text in an amber colour to the right of the overlay box."""
+        colour = (0, 191, 255)  # Amber colour
+        fh, fw = frame.shape[:2]
+
+        # The overlay is centred on the face and 1.4× the face size — match that extent
+        x1, y1, x2, y2 = bbox
+        face_w, face_h = x2 - x1, y2 - y1
+        size = int(max(face_w, face_h) * 1.4)
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        half = size // 2
+        ov_x2 = min(fw - 1, cx + half)   # right edge of overlay as drawn
+
+        label = "TRACKING"
+        font  = cv2.FONT_HERSHEY_COMPLEX_SMALL
+        scale = 0.65
+        thick = 1
+        (tw, th), baseline = cv2.getTextSize(label, font, scale, thick)
+
+        gap = 8
+        tx = ov_x2 + gap
+        # If text would clip the right edge, place it to the left of the overlay instead
+        ov_x1 = max(0, cx - half)
+        if tx + tw > fw:
+            tx = ov_x1 - tw - gap
+        tx = max(0, tx)
+        ty = cy + th // 2   # vertically centred on the face
+
+        # Thin dark shadow for readability over any background
+        cv2.putText(frame, label, (tx + 1, ty + 1),
+                    font, scale, (0, 0, 0), thick + 1, cv2.LINE_AA)
+        cv2.putText(frame, label, (tx, ty),
+                    font, scale, colour, thick, cv2.LINE_AA)
 
     def request_auth_check(self, ssn):
         with self._lock:

@@ -197,6 +197,9 @@ class ProfilerPanel(QWidget):
 
         face_data = {r['ssn']: r for r in results if r.get('ssn')}
 
+        # Snapshot the tracked SSN for this render pass
+        tracked_ssn = self.feed_manager._designator.get_tracked_ssn()
+
         for ssn in ssns_to_show:
             person = self.db.get_by_ssn(ssn)
             if not person:
@@ -205,9 +208,10 @@ class ProfilerPanel(QWidget):
             face_age = fd.get('face_age')
             face_sex = fd.get('face_sex')
             crime_chance = self._get_crime_chance_for_ssn(ssn, visible_by_feed)
+            is_tracked = (ssn == tracked_ssn)
 
             try:
-                card_img = render_card_with_face_data(person, face_age, face_sex, crime_chance)
+                card_img = render_card_with_face_data(person, face_age, face_sex, crime_chance, is_tracked=is_tracked)
                 pixmap = pil_to_qpixmap(card_img)
             except Exception as e:
                 print(f"[ProfilerPanel] Card render error for {ssn}: {e}")

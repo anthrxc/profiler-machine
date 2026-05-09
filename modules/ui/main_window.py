@@ -232,6 +232,13 @@ class ConsoleWidget(QWidget):
         self._status_auth.setStyleSheet("color: #555555;")
         status_layout.addWidget(self._status_auth)
 
+        status_layout.addWidget(self._make_sep())
+
+        self._status_track = QLabel("")
+        self._status_track.setFont(QFont("Courier New", 8))
+        self._status_track.setStyleSheet("color: #555555;")
+        status_layout.addWidget(self._status_track)
+
         status_layout.addStretch()
         layout.addWidget(status_bar)
 
@@ -293,6 +300,21 @@ class ConsoleWidget(QWidget):
             self._status_user.setText("USER: —")
             self._status_user.setStyleSheet("color: #555555;")
             self._status_auth.setText("")
+
+        # Tracking status label
+        tracked_ssn = self.feed_manager._designator.get_tracked_ssn()
+        if tracked_ssn:
+            if self.feed_manager._designator.is_tracked_visible():
+                last_feed = self.feed_manager._designator.get_tracked_last_feed()
+                feed_tag = f" FEED {last_feed}" if last_feed is not None else ""
+                self._status_track.setText(f"TRACKING: {tracked_ssn}{feed_tag}")
+                self._status_track.setStyleSheet("color: #ffa500;")
+            else:
+                self._status_track.setText(f"TRACKING: {tracked_ssn} [LOST]")
+                self._status_track.setStyleSheet("color: #ff4444;")
+        else:
+            self._status_track.setText("")
+            self._status_track.setStyleSheet("color: #555555;")
 
     # -------------------------------------------------------------------------
     # Auth
@@ -381,6 +403,7 @@ class ConsoleWidget(QWidget):
             self._print("feed [add/remove/focus/grid/list]")
             self._print("alert [add/remove/list/mute/unmute]  —  add: designation|co-presence|ssn")
             self._print("profiler [toggle/start/stop/show/enroll/remove/update/list/info]")
+            self._print("track <SSN>  |  untrack")
 
         elif primary == "fullscreen":
             self._main_window.toggle_fullscreen()
@@ -388,6 +411,27 @@ class ConsoleWidget(QWidget):
 
         elif primary == "using":
             self._handle_using(args)
+
+        elif primary == "track":
+            if not args:
+                self._print("Usage: track <SSN>", ok=False)
+                return
+            ssn = args[0]
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                self._print(f"No person found: {ssn}", ok=False)
+                return
+            self.feed_manager._designator.set_tracked_ssn(ssn)
+            name = person[2] or ssn
+            self._print(f"Now tracking {name} [{ssn}] across all feeds.")
+
+        elif primary == "untrack":
+            current = self.feed_manager._designator.get_tracked_ssn()
+            self.feed_manager._designator.clear_tracked_ssn()
+            if current:
+                self._print(f"Tracking cleared for {current}.")
+            else:
+                self._print("No active tracking target.")
 
         elif primary == "overlay":
             if not args:
@@ -1227,8 +1271,43 @@ class MainWindow(QWidget):
         self._feed_timer.timeout.connect(self._refresh_feed)
         # Feed timer is NOT started here — _on_intro_finished starts it
 
+        # Cross-feed tracking lost/reacquired monitor
+        self._track_was_visible = False
+        self._track_monitor = QTimer()
+        self._track_monitor.timeout.connect(self._check_tracking)
+
     def _on_intro_finished(self):
         self._feed_timer.start(33)
+        self._track_monitor.start(1000)
+
+    def _check_tracking(self):
+        """Fire console messages and audio when tracked subject is lost or reacquired."""
+        designator = self.feed_manager._designator
+        tracked_ssn = designator.get_tracked_ssn()
+        if not tracked_ssn:
+            self._track_was_visible = False
+            return
+
+        now_visible = designator.is_tracked_visible()
+        if self._track_was_visible and not now_visible:
+            last_feed = designator.get_tracked_last_feed()
+            feed_tag = f" — last seen in FEED {last_feed}" if last_feed is not None else ""
+            self._console._print(f"SUBJECT LOST: {tracked_ssn}{feed_tag}", ok=False)
+            threading.Thread(target=self._play_alert, daemon=True).start()
+        elif not self._track_was_visible and now_visible:
+            last_feed = designator.get_tracked_last_feed()
+            feed_tag = f" — reacquired in FEED {last_feed}" if last_feed is not None else ""
+            self._console._print(f"SUBJECT REACQUIRED: {tracked_ssn}{feed_tag}")
+            threading.Thread(target=self._play_alert, daemon=True).start()
+
+        self._track_was_visible = now_visible
+
+    def _play_alert(self):
+        try:
+            from modules.io.playsound import play_sound
+            play_sound(os.path.join('assets', 'audio', 'alert.wav'))
+        except Exception:
+            pass
 
     def _init_ui(self):
         self.setWindowFlags(Qt.FramelessWindowHint)
@@ -1319,6 +1398,14 @@ class MainWindow(QWidget):
         feed_ids = list(frames.keys())
         count = len(feed_ids)
 
+        # Cross-feed tracking: highlight last-known feed when subject is lost
+        designator = self.feed_manager._designator
+        tracked_ssn       = designator.get_tracked_ssn()
+        tracked_visible   = designator.is_tracked_visible() if tracked_ssn else False
+        tracked_last_feed = designator.get_tracked_last_feed() if tracked_ssn else None
+        # Show amber border on last-known feed only while subject is LOST
+        highlight_fid = tracked_last_feed if (tracked_ssn and not tracked_visible and tracked_last_feed is not None) else None
+
         if count == 1:
             fid = feed_ids[0]
             frame = frames[fid]
@@ -1330,6 +1417,10 @@ class MainWindow(QWidget):
             cell = frame.copy()
             cv2.putText(cell, f"FEED {fid}", (8, 22),
                         cv2.FONT_HERSHEY_COMPLEX, 0.55, (255, 255, 255), 1)
+            if fid == highlight_fid:
+                cv2.rectangle(cell, (0, 0), (W - 1, H - 1), (0, 165, 255), 2)
+                cv2.putText(cell, "LAST KNOWN LOCATION", (8, H - 10),
+                            cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.6, (0, 165, 255), 1)
             return cell
 
         cols = math.ceil(math.sqrt(count))
@@ -1347,13 +1438,31 @@ class MainWindow(QWidget):
                 cv2.putText(cell, f"FEED {fid} — WAITING", (10, ch // 2),
                             cv2.FONT_HERSHEY_COMPLEX, 0.5, (100, 100, 100), 1)
             else:
-                cell = cv2.resize(frame, (cw, ch))
+                cell = self._letterbox(frame, cw, ch)
                 cv2.putText(cell, f"FEED {fid}", (8, 22),
                             cv2.FONT_HERSHEY_COMPLEX, 0.55, (255, 255, 255), 1)
-                cv2.rectangle(cell, (0, 0), (cw - 1, ch - 1), (40, 40, 40), 1)
+                if fid == highlight_fid:
+                    cv2.rectangle(cell, (0, 0), (cw - 1, ch - 1), (0, 165, 255), 2)
+                    cv2.putText(cell, "LAST KNOWN", (4, ch - 6),
+                                cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.5, (0, 165, 255), 1)
+                else:
+                    cv2.rectangle(cell, (0, 0), (cw - 1, ch - 1), (40, 40, 40), 1)
             grid[y:y + ch, x:x + cw] = cell
 
         return grid
+
+    @staticmethod
+    def _letterbox(frame, target_w, target_h):
+        """Fit frame into (target_w × target_h) preserving aspect ratio, padding with black."""
+        fh, fw = frame.shape[:2]
+        scale = min(target_w / fw, target_h / fh)
+        new_w, new_h = int(fw * scale), int(fh * scale)
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        cell = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        pad_x = (target_w - new_w) // 2
+        pad_y = (target_h - new_h) // 2
+        cell[pad_y:pad_y + new_h, pad_x:pad_x + new_w] = resized
+        return cell
 
     def moveEvent(self, event):
         self._alert_window.anchor_to(self)
