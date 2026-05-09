@@ -47,9 +47,25 @@ class VideoStream:
         with self._lock:
             return self._frame.copy() if self._frame is not None else None
 
+    def _is_rtsp(self):
+        return isinstance(self.source, str) and self.source.lower().startswith("rtsp")
+
     def _open(self):
         """Try to open the capture source. Returns True on success."""
-        cap = cv2.VideoCapture(self.source)
+        if self._is_rtsp():
+            # Pass FFmpeg options to cap RTSP socket timeout at 5s instead of the
+            # default 30s, so failed reads resolve quickly rather than hanging.
+            cap = cv2.VideoCapture(
+                self.source,
+                cv2.CAP_FFMPEG,
+                [
+                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5_000,
+                    cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5_000,
+                ]
+            )
+        else:
+            cap = cv2.VideoCapture(self.source)
+
         if cap.isOpened():
             self.cap = cap
             return True
@@ -57,9 +73,11 @@ class VideoStream:
         return False
 
     def _capture_loop(self):
-        retry_delay = 2.0
+        # RTSP streams can drop mid-session; fail fast with fewer retries since
+        # each read now resolves in seconds rather than 30s.
+        retry_delay  = 2.0
+        max_failures = 3 if self._is_rtsp() else 10
         consecutive_failures = 0
-        max_failures = 10
 
         # Keep trying to open the source until connected or stopped
         while self._running and not self._open():
