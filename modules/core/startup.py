@@ -21,6 +21,7 @@ STEPS = [
     "MACHINE.UI.INTERFACE",
     "MACHINE.PROFILER.FACIAL_DETECTION",
     "MACHINE.PROFILER.FACIAL_RECOGNITION",
+    "MACHINE.PROFILER.BODY_DETECTION",
     "MACHINE.PROFILER.DATABASE",
     "MACHINE.PROFILER.AUTO_ENROLL",
     "MACHINE.PROFILER.ANTISPOOF",
@@ -166,7 +167,8 @@ class LoadingScreen(QWidget):
             return any(s['status'] == 'fail' for s in self._step_states)
 
     def _warmup_wrapper(self):
-        self._result['app'], self._result['db'], self._result['antispoof'] = self._warmup()
+        (self._result['app'], self._result['db'],
+         self._result['antispoof'], self._result['body_detector']) = self._warmup()
         with self._lock:
             self._done = True
         self._sound_done.wait(timeout=10)
@@ -178,6 +180,7 @@ class LoadingScreen(QWidget):
         app = None
         db = None
         antispoof = None
+        body_detector = None
 
         # SYSTEM
         self._begin_step(STEPS[0])
@@ -242,8 +245,27 @@ class LoadingScreen(QWidget):
         else:
             self._fail_step()
 
-        # DATABASE
+        # BODY_DETECTION
+        # Loaded here, before QApplication owns the main thread, for the same
+        # CUDA-DLL-ordering reason as InsightFace. A failure here is non-fatal
+        # — the Designator degrades gracefully to face-only tracking.
         self._begin_step(STEPS[7])
+        try:
+            from modules.profiler.body_detector import BodyDetector
+            body_detector = BodyDetector()
+            ok = body_detector.load()
+            if ok:
+                self._complete_step()
+            else:
+                body_detector = None
+                self._fail_step()
+        except Exception as e:
+            print(f"[{_timestamp()}] MACHINE.PROFILER.BODY_DETECTION ERROR: {e}")
+            body_detector = None
+            self._fail_step()
+
+        # DATABASE
+        self._begin_step(STEPS[8])
         try:
             from modules.profiler.recognition import RecognitionDB
             db = RecognitionDB()
@@ -256,7 +278,7 @@ class LoadingScreen(QWidget):
             self._fail_step()
 
         # AUTO_ENROLL
-        self._begin_step(STEPS[8])
+        self._begin_step(STEPS[9])
         if db is not None and app is not None:
             try:
                 results = db.enroll_startup_images(app)
@@ -274,7 +296,7 @@ class LoadingScreen(QWidget):
             self._fail_step()
 
         # ANTISPOOF
-        self._begin_step(STEPS[9])
+        self._begin_step(STEPS[10])
         try:
             from modules.profiler.antispoof import AntiSpoofModel
             antispoof = AntiSpoofModel(ANTISPOOF_MODEL_PATH)
@@ -284,16 +306,17 @@ class LoadingScreen(QWidget):
             self._fail_step()
 
         # THREAT_ASSESSMENT
-        self._begin_step(STEPS[10])
+        self._begin_step(STEPS[11])
         time.sleep(0.5)
         self._complete_step()
 
-        # Check for failures
-        if self._has_failures():
+        # Check for failures — body detector failure is tolerated (degrades to
+        # face-only) so we don't abort startup on its account.
+        if self._has_failures_excluding_body():
             print(f"[{_timestamp()}] System initialization failed. Exiting...")
             time.sleep(2.0)
             self._sound_done.set()
-            return None, None, None
+            return None, None, None, None
 
         if play_sound is not None:
             def _play_and_signal():
@@ -303,7 +326,15 @@ class LoadingScreen(QWidget):
         else:
             self._sound_done.set()
 
-        return app, db, antispoof
+        return app, db, antispoof, body_detector
+
+    def _has_failures_excluding_body(self):
+        """A failed body detector is non-fatal — the Designator degrades to face-only."""
+        with self._lock:
+            for s in self._step_states:
+                if s['status'] == 'fail' and s['text'] != 'MACHINE.PROFILER.BODY_DETECTION':
+                    return True
+            return False
 
     def get_app(self):
         return self._result.get('app')
@@ -313,6 +344,9 @@ class LoadingScreen(QWidget):
 
     def get_antispoof(self):
         return self._result.get('antispoof')
+
+    def get_body_detector(self):
+        return self._result.get('body_detector')
 
 
 def run(qt_app):
@@ -327,4 +361,5 @@ def run(qt_app):
     screen.show()
     qt_app.exec_()
 
-    return screen.get_app(), screen.get_db(), screen.get_antispoof()
+    return (screen.get_app(), screen.get_db(),
+            screen.get_antispoof(), screen.get_body_detector())

@@ -13,12 +13,12 @@ def main():
     qt_app = QApplication(sys.argv)
 
     # Loading screen — blocks until warmup complete
-    app, db, antispoof = run(qt_app)
+    app, db, antispoof, body_detector = run(qt_app)
 
     if app is None or db is None:
         sys.exit(1)
 
-    manager = FeedManager(app, db)
+    manager = FeedManager(app, db, body_detector=body_detector)
     manager.add_feed(0)
 
     window = MainWindow(manager, db, antispoof)

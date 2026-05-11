@@ -8,13 +8,13 @@ from modules.profiler.alerts import AlertEngine
 
 
 class FeedManager:
-    def __init__(self, app, db):
+    def __init__(self, app, db, body_detector=None):
         self.app = app
         self.db = db
         self._feeds = {}
         self._lock = threading.Lock()
         self._focused = None
-        self._designator = Designator(app, db)
+        self._designator = Designator(app, db, body_detector=body_detector)
 
         # AlertEngine is started after console is ready (set_console called)
         self._alert_engine = AlertEngine(
