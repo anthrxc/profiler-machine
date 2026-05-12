@@ -349,6 +349,12 @@ class ConsoleWidget(QWidget):
         person = self.db.get_by_ssn(self._active_user_ssn)
         return person and person[3] == 'root'
 
+    def _is_admin_or_root(self):
+        if not self._active_user_ssn:
+            return False
+        person = self.db.get_by_ssn(self._active_user_ssn)
+        return person and person[3] in ('root', 'admin')
+
     # -------------------------------------------------------------------------
     # Key events
     # -------------------------------------------------------------------------
@@ -403,23 +409,30 @@ class ConsoleWidget(QWidget):
         primary = parts[0].lower()
         args = parts[1:]
 
+        # ── Unauthenticated gate ──────────────────────────────────────────────
+        # Only these commands work without a logged-in user.
+        ALWAYS_ALLOWED = {'help', 'quit', 'fullscreen'}
+        if primary not in ALWAYS_ALLOWED:
+            # Allow 'profiler login' unauthenticated; block everything else.
+            if primary == 'profiler' and args and args[0].lower() == 'login':
+                pass  # fall through to handler
+            elif not self._active_user_ssn:
+                self._print(
+                    "Access denied — use 'profiler login <SSN>' to authenticate.",
+                    ok=False,
+                )
+                return
+
         if primary == "quit":
             self._print("SHUTTING DOWN...")
             self._main_window.close()
 
         elif primary == "help":
-            self._print("using <SSN> | quit | fullscreen | overlay [role]")
-            self._print("feed [add/remove/focus/grid/list]")
-            self._print("alert [add/remove/list/mute/unmute]  —  add: designation|co-presence|ssn")
-            self._print("profiler [toggle/start/stop/show/enroll/remove/update/list/info/neutralize]")
-            self._print("track <SSN>  |  untrack")
+            self._show_help()
 
         elif primary == "fullscreen":
             self._main_window.toggle_fullscreen()
             self._print("Toggled fullscreen.")
-
-        elif primary == "using":
-            self._handle_using(args)
 
         elif primary == "track":
             if not args:
@@ -457,71 +470,60 @@ class ConsoleWidget(QWidget):
 
         elif primary == "feed":
             if not args:
-                self._print("Usage: feed [add/remove/focus/grid/list]", ok=False)
+                self._print("Usage: feed [add/remove/focus/grid/list/flip]", ok=False)
                 return
             self._handle_feed(args)
 
         elif primary == "profiler":
             if not args:
-                self._print("Usage: profiler [toggle/start/stop/show/enroll/remove/update/list/info]", ok=False)
+                self._print("Usage: profiler [login/toggle/start/stop/show/enroll/remove/update/list/info/neutralize]", ok=False)
                 return
             self._handle_profiler(args)
 
         else:
             self._print(f"Unknown command: '{primary}'", ok=False)
 
-    def _handle_using(self, args):
-        if not args:
-            self._print("Usage: using <SSN>", ok=False)
-            return
-        ssn = args[0]
-        person = self.db.get_by_ssn(ssn)
-        if not person:
-            self._print(f"No person found: {ssn}", ok=False)
-            return
-        if person[3] not in ('root', 'admin'):
-            self._print(f"Access denied — {ssn} does not have elevated privileges.", ok=False)
-            return
-        if not self.feed_manager._designator.is_ssn_in_frame(ssn):
-            self._print(f"Authentication failed — {ssn} not detected in any active feed.", ok=False)
-            return
+    def _show_help(self):
+        """Print role-aware command reference."""
+        designation = None
+        if self._active_user_ssn:
+            person = self.db.get_by_ssn(self._active_user_ssn)
+            designation = person[3] if person else None
 
-        # Anti-spoof check
-        if self._antispoof is not None:
-            self._print("Running liveness check...")
-            designator = self.feed_manager._designator
-            with designator._lock:
-                # _latest_results is now {feed_id: [results]} — flatten all feeds
-                all_results = []
-                for feed_results in designator._latest_results.values():
-                    all_results.extend(feed_results)
-            # Find the bbox for this SSN
-            bbox = None
-            for r in all_results:
-                if r.get('ssn') == ssn:
-                    bbox = r.get('bbox')
-                    break
-            if bbox is None:
-                self._print("Authentication failed — could not locate face in frame.", ok=False)
-                return
-            # Get the latest raw frame
-            frames = self.feed_manager.get_raw_frames()
-            frame = next(iter(frames.values()), None) if frames else None
-            if frame is None:
-                self._print("Authentication failed — no frame available.", ok=False)
-                return
-            result = self._antispoof.predict_from_bbox(frame, bbox)
-            if not result['ok']:
-                self._print("Authentication failed — liveness check error.", ok=False)
-                return
-            if not result['is_live']:
-                self._print(f"Authentication failed — spoofing detected (score: {result['score']:.2f}).", ok=False)
-                return
-            self._print(f"Liveness confirmed (score: {result['score']:.2f}).")
+        self._print("═" * 60)
+        self._print("PROFILER MACHINE — COMMAND REFERENCE")
+        if designation:
+            self._print(f"Logged in as: {designation.upper()}")
+        else:
+            self._print("Not authenticated.")
 
-        self._active_user_ssn = ssn
-        self._last_seen_time = None
-        self._print(f"Authenticated as {person[2] or ssn} [{person[3].upper()}].")
+        self._print("─" * 60)
+        self._print("quit                    Exit the application")
+        self._print("fullscreen              Toggle fullscreen display")
+        self._print("help                    Show this reference")
+
+        if not self._active_user_ssn:
+            self._print("─" * 60)
+            self._print("profiler login <SSN>    Authenticate to unlock all commands")
+        else:
+            self._print("profiler login <SSN>    Switch authenticated user")
+            self._print("─" * 60)
+            self._print("track <SSN>             Track subject across all feeds")
+            self._print("untrack                 Clear active tracking target")
+            self._print("overlay <role>          Force debug overlay role")
+            self._print("─" * 60)
+            self._print("feed add <src> [fliph] [flipv]   Add video feed")
+            self._print("feed remove/focus/grid/list/flip Manage feeds")
+            self._print("─" * 60)
+            self._print("alert add/remove/list/mute/unmute")
+            self._print("profiler toggle/start/stop/show/enroll/list/info/update")
+            if self._is_root():
+                self._print("─" * 60)
+                self._print("[ROOT] profiler remove <SSN>")
+                self._print("[ROOT] profiler neutralize <SSN> [note]")
+                self._print("[ROOT] profiler update <SSN> designation <value>")
+
+        self._print("═" * 60)
 
     def _handle_alert(self, args):
         from modules.profiler.alerts import parse_condition, ALERT_SOUND_PATH
@@ -605,24 +607,43 @@ class ConsoleWidget(QWidget):
         rest = args[1:]
 
         if sub == "list":
-            feeds = self.feed_manager.list_feeds()
-            self._print(f"Active feeds: {', '.join(str(f) for f in feeds)}" if feeds else "No active feeds.")
+            feeds = self.feed_manager.list_feeds_with_config()
+            if feeds:
+                self._print(f"{len(feeds)} active feed(s):")
+                for fid, source, flip_h, flip_v in feeds:
+                    flags = []
+                    if flip_h: flags.append("fliph")
+                    if flip_v: flags.append("flipv")
+                    flag_str = f"  [{', '.join(flags)}]" if flags else ""
+                    self._print(f"  Feed {fid}: {source}{flag_str}")
+            else:
+                self._print("No active feeds.")
+
         elif sub == "add":
             if not rest:
-                self._print("Usage: feed add [source]", ok=False)
+                self._print("Usage: feed add <source> [fliph] [flipv]", ok=False)
                 return
             source = int(rest[0]) if rest[0].isdigit() else rest[0]
+            flags = [f.lower() for f in rest[1:]]
+            flip_h = 'fliph' in flags
+            flip_v = 'flipv' in flags
             try:
-                fid = self.feed_manager.add_feed(source)
-                self._print(f"Feed {fid} added: {source}")
+                fid = self.feed_manager.add_feed(source, flip_h=flip_h, flip_v=flip_v)
+                flag_parts = []
+                if flip_h: flag_parts.append("fliph")
+                if flip_v: flag_parts.append("flipv")
+                flag_info = f" [{', '.join(flag_parts)}]" if flag_parts else ""
+                self._print(f"Feed {fid} added: {source}{flag_info}")
             except Exception as e:
                 self._print(f"Failed to add feed: {e}", ok=False)
+
         elif sub == "remove":
             if not rest or not rest[0].isdigit():
                 self._print("Usage: feed remove [feed ID]", ok=False)
                 return
             self.feed_manager.remove_feed(int(rest[0]))
             self._print(f"Feed {rest[0]} removed.")
+
         elif sub == "focus":
             if not rest or not rest[0].isdigit():
                 self._print("Usage: feed focus [feed ID]", ok=False)
@@ -630,9 +651,32 @@ class ConsoleWidget(QWidget):
             fid = int(rest[0])
             self.feed_manager.focus_feed(fid)
             self._print(f"Focused feed {fid}.")
+
         elif sub == "grid":
             self.feed_manager.focus_feed(None)
             self._print("Returned to grid view.")
+
+        elif sub == "flip":
+            if len(rest) < 2 or not rest[0].isdigit():
+                self._print("Usage: feed flip <feed_id> <h|v|both|none>", ok=False)
+                return
+            fid  = int(rest[0])
+            mode = rest[1].lower()
+            flip_map = {
+                'h':    (True,  None),
+                'v':    (None,  True),
+                'both': (True,  True),
+                'none': (False, False),
+            }
+            if mode not in flip_map:
+                self._print("Flip mode must be: h, v, both, or none", ok=False)
+                return
+            fh, fv = flip_map[mode]
+            if self.feed_manager.flip_feed(fid, flip_h=fh, flip_v=fv):
+                self._print(f"Feed {fid} flip set to: {mode}")
+            else:
+                self._print(f"Feed {fid} not found.", ok=False)
+
         else:
             self._print(f"Unknown feed command: '{sub}'", ok=False)
 
@@ -641,7 +685,53 @@ class ConsoleWidget(QWidget):
         rest = args[1:]
         panel = self._main_window._profiler_panel
 
-        if sub == "toggle":
+        if sub == "login":
+            if not rest:
+                self._print("Usage: profiler login <SSN>", ok=False)
+                return
+            ssn = rest[0]
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                self._print(f"No person found: {ssn}", ok=False)
+                return
+            if person[3] not in ('root', 'admin'):
+                self._print(f"Access denied — {ssn} does not have elevated privileges.", ok=False)
+                return
+            if not self.feed_manager._designator.is_ssn_in_frame(ssn):
+                self._print(f"Authentication failed — {ssn} not detected in any active feed.", ok=False)
+                return
+
+            # Anti-spoof liveness check
+            if self._antispoof is not None:
+                self._print("Running liveness check...")
+                designator = self.feed_manager._designator
+                with designator._lock:
+                    all_results = []
+                    for feed_results in designator._latest_results.values():
+                        all_results.extend(feed_results)
+                bbox = next((r.get('bbox') for r in all_results if r.get('ssn') == ssn), None)
+                if bbox is None:
+                    self._print("Authentication failed — could not locate face in frame.", ok=False)
+                    return
+                frames = self.feed_manager.get_raw_frames()
+                frame = next(iter(frames.values()), None) if frames else None
+                if frame is None:
+                    self._print("Authentication failed — no frame available.", ok=False)
+                    return
+                result = self._antispoof.predict_from_bbox(frame, bbox)
+                if not result['ok']:
+                    self._print("Authentication failed — liveness check error.", ok=False)
+                    return
+                if not result['is_live']:
+                    self._print(f"Authentication failed — spoofing detected (score: {result['score']:.2f}).", ok=False)
+                    return
+                self._print(f"Liveness confirmed (score: {result['score']:.2f}).")
+
+            self._active_user_ssn = ssn
+            self._last_seen_time = None
+            self._print(f"Authenticated as {person[2] or ssn} [{person[3].upper()}].")
+
+        elif sub == "toggle":
             self._main_window.toggle_profiler()
             state = "open" if self._main_window._profiler_visible else "closed"
             self._print(f"Profiler panel {state}.")
