@@ -168,7 +168,8 @@ class LoadingScreen(QWidget):
 
     def _warmup_wrapper(self):
         (self._result['app'], self._result['db'],
-         self._result['antispoof'], self._result['body_detector']) = self._warmup()
+         self._result['antispoof'], self._result['body_detector'],
+         self._result['devices']) = self._warmup()
         with self._lock:
             self._done = True
         self._sound_done.wait(timeout=10)
@@ -181,6 +182,7 @@ class LoadingScreen(QWidget):
         db = None
         antispoof = None
         body_detector = None
+        devices = []
 
         # SYSTEM
         self._begin_step(STEPS[0])
@@ -201,12 +203,22 @@ class LoadingScreen(QWidget):
             print(f"[{_timestamp()}] MACHINE.IO.AUDIO ERROR: {e}")
             self._fail_step()
 
-        # VIDEO_STREAM
+        # VIDEO_STREAM — open a test capture AND silently scan all devices
         self._begin_step(STEPS[3])
         try:
             import cv2
             cap = cv2.VideoCapture(0)
             cap.release()
+            # Scan for available devices in the background while warmup continues.
+            # Results are ready by the time the loading screen closes.
+            from modules.core.device_enumerator import enumerate_devices
+            import threading as _threading
+            _scan_done = threading.Event()
+            def _scan():
+                nonlocal devices
+                devices = enumerate_devices()
+                _scan_done.set()
+            _threading.Thread(target=_scan, daemon=True).start()
             self._complete_step()
         except Exception as e:
             print(f"[{_timestamp()}] MACHINE.IO.VIDEO_STREAM ERROR: {e}")
@@ -326,7 +338,13 @@ class LoadingScreen(QWidget):
         else:
             self._sound_done.set()
 
-        return app, db, antispoof, body_detector
+        # Ensure device scan is complete before we return
+        try:
+            _scan_done.wait(timeout=15)
+        except Exception:
+            pass
+
+        return app, db, antispoof, body_detector, devices
 
     def _has_failures_excluding_body(self):
         """A failed body detector is non-fatal — the Designator degrades to face-only."""
@@ -348,6 +366,9 @@ class LoadingScreen(QWidget):
     def get_body_detector(self):
         return self._result.get('body_detector')
 
+    def get_devices(self):
+        return self._result.get('devices', [])
+
 
 def run(qt_app):
     screen = LoadingScreen()
@@ -362,4 +383,5 @@ def run(qt_app):
     qt_app.exec_()
 
     return (screen.get_app(), screen.get_db(),
-            screen.get_antispoof(), screen.get_body_detector())
+            screen.get_antispoof(), screen.get_body_detector(),
+            screen.get_devices())

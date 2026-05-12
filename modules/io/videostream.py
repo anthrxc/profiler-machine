@@ -1,5 +1,7 @@
 # videostream.py
-# Handles a single video feed — capturing, mirroring, and providing frames.
+# Handles a single video feed — capturing and providing frames.
+# Flip transforms (horizontal/vertical) are applied by FeedManager
+# based on per-feed config, not here.
 
 import cv2
 import threading
@@ -107,7 +109,6 @@ class VideoStream:
                 continue
 
             consecutive_failures = 0
-            frame = cv2.flip(frame, 1) if isinstance(self.source, int) else frame
 
             with self._lock:
                 self._frame = frame

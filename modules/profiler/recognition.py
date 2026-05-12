@@ -160,6 +160,15 @@ class RecognitionDB:
             f'UPDATE persons SET {field} = ? WHERE stylized_id = ?',
             (value, ssn)
         )
+        # When designation changes, pull a fresh description from the new
+        # designation's pool so stale notes (e.g. "Corrupt FBI agent" on an
+        # ADMIN) don't persist as continuity errors.
+        if field == 'designation':
+            new_notes = _get_random_description(value)
+            self._conn.execute(
+                'UPDATE persons SET notes = ? WHERE stylized_id = ?',
+                (new_notes, ssn)
+            )
         self._conn.commit()
         return True
 

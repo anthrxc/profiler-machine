@@ -153,6 +153,103 @@ class Console(QWidget):
         self._status.setStyleSheet(f"color: {color}; padding: 4px 12px 0px 12px;")
         self._status.setText(message)
 
+    def _get_user_designation(self):
+        """Return current user's designation, or None if not logged in."""
+        if self._active_user_ssn is None:
+            return None
+        person = self.db.get_by_ssn(self._active_user_ssn)
+        return person[3] if person else None
+
+    def _show_help_overview(self):
+        """Print overview of available commands filtered by user designation."""
+        designation = self._get_user_designation()
+        print("\n" + "="*70)
+        print("PROFILER MACHINE — COMMAND REFERENCE")
+        if designation:
+            print(f"Logged in as: {designation.upper()}")
+        else:
+            print("Not logged in")
+        print("="*70)
+
+        # Always available commands
+        print("\n[ALWAYS AVAILABLE]")
+        print("  shutdown              Exit the application")
+        print("  fullscreen        Toggle fullscreen display")
+        print("  help [command]    Show this help, or details on a specific command")
+
+        # Admin/root only commands
+        if self._is_admin_or_root():
+            print("\n[ADMIN/ROOT ONLY]")
+            print("  feed              Manage video feeds (add/remove/focus/grid/list)")
+            print("  profiler          Manage person database (login/list/info/enroll/update)")
+
+        # Unauthenticated users can still log in
+        if designation is None:
+            print("\n[UNAUTHENTICATED]")
+            print("  profiler login    Authenticate with your SSN for access")
+
+        print("\nType 'help <command>' for detailed syntax and examples.")
+        print("="*70 + "\n")
+
+    def _show_help_for_command(self, cmd):
+        """Print detailed help for a specific command."""
+        cmd = cmd.lower()
+        designation = self._get_user_designation()
+
+        help_texts = {
+            "shutdown": (
+                "SHUTDOWN — Exit the application\n"
+                "  Syntax: shutdown\n"
+                "  Closes Profiler Machine and all active video feeds."
+            ),
+            "fullscreen": (
+                "FULLSCREEN — Toggle fullscreen mode\n"
+                "  Syntax: fullscreen\n"
+                "  Toggles the main display between windowed and fullscreen."
+            ),
+            "help": (
+                "HELP — Show command reference\n"
+                "  Syntax: help [command]\n"
+                "  Examples:\n"
+                "    help              Show all available commands\n"
+                "    help feed         Show detailed help for 'feed' command\n"
+                "    help profiler     Show detailed help for 'profiler' command"
+            ),
+            "feed": (
+                "FEED — Manage video input feeds (admin/root only)\n"
+                "  Syntax: feed <subcommand> [args]\n"
+                "  Subcommands:\n"
+                "    feed add <source> [fliph] [flipv]   Add feed (source: device index or URL)\n"
+                "    feed remove <feed_id>               Remove a feed by ID\n"
+                "    feed focus <feed_id>                Show single feed in fullscreen\n"
+                "    feed grid                           Return to grid view of all feeds\n"
+                "    feed list                           List all active feeds with flip state\n"
+                "    feed flip <feed_id> <h|v|both|none> Set flip for a feed\n"
+                "  Flip examples:\n"
+                "    feed add 0 fliph        Add webcam mirrored horizontally\n"
+                "    feed add 0 fliph flipv  Add webcam mirrored on both axes\n"
+                "    feed flip 0 h           Toggle horizontal flip on feed 0\n"
+                "    feed flip 0 none        Remove all flips from feed 0"
+            ),
+            "profiler": (
+                "PROFILER — Manage person database (admin/root only)\n"
+                "  Syntax: profiler <subcommand> [args]\n"
+                "  Subcommands:\n"
+                "    profiler login <ssn>              Log in as a person\n"
+                "    profiler list                     List all enrolled persons\n"
+                "    profiler info <ssn>               Show details for a person\n"
+                "    profiler enroll <image_file>      Enroll a new person from image\n"
+                "    profiler update <ssn> <field> <value>\n"
+                "                                      Update person (field: name/designation/notes)"
+            ),
+        }
+
+        if cmd in help_texts:
+            print(f"\n{help_texts[cmd]}\n")
+            self._set_status(f"Help shown for '{cmd}'. See terminal.")
+        else:
+            self._set_status(f"No help available for '{cmd}'. Try 'help' for overview.", ok=False)
+
     def _on_submit(self):
         text = self._input.text().strip()
         self._input.clear()
@@ -178,16 +275,15 @@ class Console(QWidget):
         primary = parts[0].lower()
         args = parts[1:]
 
-        if primary == "quit":
+        if primary == "shutdown":
             self._set_status("SHUTTING DOWN...")
             self.main_window.close()
 
         elif primary == "help" or primary == "?":
-            self._set_status(
-                "quit | fullscreen "
-                "feed [add/remove/focus/grid/list] | "
-                "profiler [enroll/update/list/info/login]"
-            )
+            if args:
+                self._show_help_for_command(args[0].lower())
+            else:
+                self._show_help_overview()
 
         elif primary == "fullscreen":
             self.main_window.toggle_fullscreen()
@@ -219,22 +315,41 @@ class Console(QWidget):
         rest = args[1:]
 
         if sub == "list":
-            feeds = self.feed_manager.list_feeds()
+            feeds = self.feed_manager.list_feeds_with_config()
             if feeds:
-                self._set_status(f"Active feeds: {', '.join(str(f) for f in feeds)}")
+                print("\n--- ACTIVE FEEDS ---")
+                for fid, source, flip_h, flip_v in feeds:
+                    flags = []
+                    if flip_h:
+                        flags.append("fliph")
+                    if flip_v:
+                        flags.append("flipv")
+                    flag_str = f"  [{', '.join(flags)}]" if flags else ""
+                    print(f"  Feed {fid}: {source}{flag_str}")
+                print()
+                self._set_status(f"{len(feeds)} active feed(s). See terminal.")
             else:
                 self._set_status("No active feeds.")
 
         elif sub == "add":
             if not rest:
-                self._set_status("Usage: feed add [source]", ok=False)
+                self._set_status("Usage: feed add <source> [fliph] [flipv]", ok=False)
                 return
             source = rest[0]
             if source.isdigit():
                 source = int(source)
+            flags = [f.lower() for f in rest[1:]]
+            flip_h = 'fliph' in flags
+            flip_v = 'flipv' in flags
             try:
-                fid = self.feed_manager.add_feed(source)
-                self._set_status(f"Feed {fid} added: {source}")
+                fid = self.feed_manager.add_feed(source, flip_h=flip_h, flip_v=flip_v)
+                flag_parts = []
+                if flip_h:
+                    flag_parts.append("fliph")
+                if flip_v:
+                    flag_parts.append("flipv")
+                flag_info = f" [{', '.join(flag_parts)}]" if flag_parts else ""
+                self._set_status(f"Feed {fid} added: {source}{flag_info}")
             except Exception as e:
                 self._set_status(f"Failed to add feed: {e}", ok=False)
 
@@ -257,6 +372,31 @@ class Console(QWidget):
         elif sub == "grid":
             self.feed_manager.focus_feed(None)
             self._set_status("Returned to grid view.")
+
+        elif sub == "flip":
+            if len(rest) < 2:
+                self._set_status("Usage: feed flip <feed_id> <h|v|both|reset>", ok=False)
+                return
+            if not rest[0].isdigit():
+                self._set_status("Usage: feed flip <feed_id> <h|v|both|reset>", ok=False)
+                return
+            fid   = int(rest[0])
+            mode  = rest[1].lower()
+            flip_map = {
+                'h':    (True,  None),
+                'v':    (None,  True),
+                'both': (True,  True),
+                'reset': (False, False),
+            }
+            if mode not in flip_map:
+                self._set_status("Flip mode must be: h, v, both, or reset", ok=False)
+                return
+            fh, fv = flip_map[mode]
+            success = self.feed_manager.flip_feed(fid, flip_h=fh, flip_v=fv)
+            if success:
+                self._set_status(f"Feed {fid} flip set to: {mode}")
+            else:
+                self._set_status(f"Feed {fid} not found.", ok=False)
 
         else:
             self._set_status(f"Unknown feed command: '{sub}'", ok=False)

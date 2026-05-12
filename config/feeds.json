@@ -1,0 +1,9 @@
+{
+  "feeds": {
+    "0": {
+      "source": 1,
+      "flip_h": true,
+      "flip_v": false
+    }
+  }
+}
