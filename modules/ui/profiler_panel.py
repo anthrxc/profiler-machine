@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
 from modules.profiler.infocard import render_card_with_face_data, pil_to_qpixmap
+from modules.profiler.heuristics import generate as gen_heuristics
 
 PANEL_W = 650
 CARD_W  = 650
@@ -211,7 +212,15 @@ class ProfilerPanel(QWidget):
             is_tracked = (ssn == tracked_ssn)
 
             try:
-                card_img = render_card_with_face_data(person, face_age, face_sex, crime_chance, is_tracked=is_tracked)
+                in_frame = ssn in face_data
+                heuristics = gen_heuristics(ssn, person[3]) if in_frame else None
+                log = self.db.get_neutralization_log(ssn)
+                prev_designation = log[0][0] if log else None
+                card_img = render_card_with_face_data(
+                    person, face_age, face_sex, crime_chance,
+                    is_tracked=is_tracked, heuristics=heuristics,
+                    prev_designation=prev_designation,
+                )
                 pixmap = pil_to_qpixmap(card_img)
             except Exception as e:
                 print(f"[ProfilerPanel] Card render error for {ssn}: {e}")

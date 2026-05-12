@@ -92,7 +92,44 @@ class RecognitionDB:
                 last_seen_feed      INTEGER
             )
         ''')
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS neutralization_log (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                stylized_id         TEXT NOT NULL,
+                prev_designation    TEXT NOT NULL,
+                operator_ssn        TEXT,
+                note                TEXT,
+                timestamp           TEXT NOT NULL
+            )
+        ''')
         self._conn.commit()
+
+    def neutralize_subject(self, ssn, prev_designation, operator_ssn=None, note=None):
+        """Revert designation to irrelevant and write an audit log entry."""
+        self._conn.execute(
+            '''INSERT INTO neutralization_log
+               (stylized_id, prev_designation, operator_ssn, note, timestamp)
+               VALUES (?, ?, ?, ?, ?)''',
+            (ssn, prev_designation, operator_ssn, note,
+             datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        self._conn.execute(
+            'UPDATE persons SET designation = ? WHERE stylized_id = ?',
+            ('irrelevant', ssn)
+        )
+        self._conn.commit()
+        return True
+
+    def get_neutralization_log(self, ssn):
+        """Return all log entries for a subject, newest first."""
+        cursor = self._conn.execute(
+            '''SELECT prev_designation, operator_ssn, note, timestamp
+               FROM neutralization_log
+               WHERE stylized_id = ?
+               ORDER BY id DESC''',
+            (ssn,)
+        )
+        return cursor.fetchall()
 
     def is_empty(self):
         cursor = self._conn.execute('SELECT COUNT(*) FROM persons')
