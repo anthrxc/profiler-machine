@@ -15,6 +15,7 @@ from bytetracker import BYTETracker
 from modules.profiler.recognition import (
     RecognitionDB, LIVE_ENROLL_DESIGNATIONS, LIVE_ENROLL_WEIGHTS
 )
+from modules.profiler.heuristics import generate as gen_heuristics, bri_rgb, NeutralizationMonitor
 from modules.profiler.antispoof import AntiSpoofModel
 from modules.profiler.body_detector import (
     BodyDetector, face_in_body, body_top_distance, head_region_from_body
@@ -192,6 +193,10 @@ class Designator:
         self._tracked_ssn       = None
         self._tracked_last_feed = None
 
+        # Neutralization suggestion pipeline.
+        self._neut_monitor                  = NeutralizationMonitor()
+        self._pending_neutralization_suggestions = []  # list of (ssn, name, designation)
+
         self.antispoof = AntiSpoofModel(model_path=ANTISPOOF_WEIGHTS, scale=2.7)
         self._auth_request_ssn = None
         self._auth_result = None
@@ -248,6 +253,17 @@ class Designator:
     def is_tracked_visible(self):
         with self._lock:
             return self._tracked_ssn is not None and self._tracked_ssn in self._visible_ssns
+
+    def pop_neutralization_suggestions(self):
+        """Drain and return pending neutralization suggestions as list of (ssn, name, designation)."""
+        with self._lock:
+            pending = list(self._pending_neutralization_suggestions)
+            self._pending_neutralization_suggestions.clear()
+        return pending
+
+    def reset_neutralization_monitor(self, ssn):
+        """Allow re-suggestion after an operator neutralizes a subject."""
+        self._neut_monitor.reset(ssn)
 
     # -------------------------------------------------------------------------
     # Detection loop
@@ -457,6 +473,33 @@ class Designator:
             self._visible_ssns = all_visible
             if self._tracked_ssn and self._tracked_ssn in visible:
                 self._tracked_last_feed = feed_id
+
+            # BRI-decay neutralization suggestions
+            in_frame_ssns = {r['ssn'] for r in results if r.get('ssn')}
+            # Collect all ssns the monitor is currently tracking (in or out of frame)
+            monitored_ssns = (
+                set(self._neut_monitor._accum.keys()) |
+                set(self._neut_monitor._in_since.keys()) |
+                set(self._neut_monitor._out_since.keys())
+            )
+            # Union: currently visible + already being monitored (for pause logic)
+            all_ssns_to_check = in_frame_ssns | monitored_ssns
+            for ssn in all_ssns_to_check:
+                r = next((x for x in results if x.get('ssn') == ssn), None)
+                desig = r['designation'] if r else None
+                if desig is None:
+                    person = self.db.get_by_ssn(ssn)
+                    desig = person[3] if person else None
+                if not desig:
+                    continue
+                h_data = gen_heuristics(ssn, desig)
+                in_frame = ssn in in_frame_ssns
+                if self._neut_monitor.check(ssn, desig, h_data['bri'], in_frame):
+                    person = self.db.get_by_ssn(ssn)
+                    name = person[2] if person else ssn
+                    self._pending_neutralization_suggestions.append(
+                        (ssn, name, desig)
+                    )
 
     # -------------------------------------------------------------------------
     # Tracker helpers
@@ -687,6 +730,7 @@ class Designator:
             role = self._debug_role or result['designation']
             frame = self._apply_overlay(frame, result['bbox'], role)
 
+
         if tracked_ssn:
             for result in results:
                 if result.get('ssn') == tracked_ssn:
@@ -740,6 +784,36 @@ class Designator:
         frame[fy1:fy2, fx1:fx2] = roi
         return frame
 
+    def _draw_bri_indicator(self, frame, bbox, ssn, designation):
+        """Draw a small BRI score below the overlay for identified subjects."""
+        h = gen_heuristics(ssn, designation)
+        bri = h['bri']
+        r, g, b = bri_rgb(bri)
+        bgr = (b, g, r)   # PIL RGB → cv2 BGR
+
+        fh, fw = frame.shape[:2]
+        x1, y1, x2, y2 = bbox
+        size = int(max(x2 - x1, y2 - y1) * 1.4)
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        ov_y2 = min(fh - 1, cy + size // 2)
+
+        fw_scale = max(0.4, min(1.5, fw / 640.0))
+        font  = cv2.FONT_HERSHEY_COMPLEX_SMALL
+        scale = round(0.5 * fw_scale, 2)
+        thick = 1
+
+        label = f"BRI {bri:02d}"
+        (tw, th), _ = cv2.getTextSize(label, font, scale, thick)
+
+        tx = max(0, cx - tw // 2)
+        ty = min(fh - 4, ov_y2 + th + 5)
+
+        cv2.putText(frame, label, (tx + 1, ty + 1),
+                    font, scale, (0, 0, 0), thick + 1, cv2.LINE_AA)
+        cv2.putText(frame, label, (tx, ty),
+                    font, scale, bgr, thick, cv2.LINE_AA)
+
     def _draw_tracking_indicator(self, frame, bbox, designation='irrelevant'):
         colour = (0, 191, 255)
         fh, fw = frame.shape[:2]
@@ -753,8 +827,10 @@ class Designator:
 
         label = "TRACKING"
         font  = cv2.FONT_HERSHEY_COMPLEX_SMALL
-        scale = 0.65
-        thick = 1
+        # Scale text with frame width so it reads consistently across resolutions
+        fw_scale = max(0.5, min(1.8, fw / 640.0))
+        scale = round(0.58 * fw_scale, 2)
+        thick = max(1, round(fw_scale))
         (tw, th), _ = cv2.getTextSize(label, font, scale, thick)
 
         gap = 8

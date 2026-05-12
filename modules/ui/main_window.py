@@ -301,7 +301,16 @@ class ConsoleWidget(QWidget):
             self._status_user.setStyleSheet("color: #555555;")
             self._status_auth.setText("")
 
-        # Tracking status label
+        # Neutralization suggestions from BRI decay monitor
+        suggestions = self.feed_manager._designator.pop_neutralization_suggestions()
+        for ssn, name, desig in suggestions:
+            self._print(
+                f"[SYSTEM] Threat condition may have resolved for "
+                f"{name} ({ssn}) [{desig.upper()}] — "
+                f"run 'profiler neutralize {ssn}' to confirm.",
+                ok=False
+            )
+
         tracked_ssn = self.feed_manager._designator.get_tracked_ssn()
         if tracked_ssn:
             if self.feed_manager._designator.is_tracked_visible():
@@ -402,7 +411,7 @@ class ConsoleWidget(QWidget):
             self._print("using <SSN> | quit | fullscreen | overlay [role]")
             self._print("feed [add/remove/focus/grid/list]")
             self._print("alert [add/remove/list/mute/unmute]  —  add: designation|co-presence|ssn")
-            self._print("profiler [toggle/start/stop/show/enroll/remove/update/list/info]")
+            self._print("profiler [toggle/start/stop/show/enroll/remove/update/list/info/neutralize]")
             self._print("track <SSN>  |  untrack")
 
         elif primary == "fullscreen":
@@ -730,6 +739,29 @@ class ConsoleWidget(QWidget):
                     self._print(f"Invalid designation. Options: {', '.join(DESIGNATIONS)}", ok=False)
                     return
             self._print(f"Updated {field} for {ssn}." if self.db.update_person(ssn, field, value) else f"Update failed for {ssn}.", ok=True)
+
+        elif sub == "neutralize":
+            if not self._is_root():
+                self._print("Access denied — root authentication required.", ok=False)
+                return
+            if not rest:
+                self._print("Usage: profiler neutralize <SSN> [note]", ok=False)
+                return
+            ssn = rest[0]
+            note = ' '.join(rest[1:]) or None
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                self._print(f"No person found: {ssn}", ok=False)
+                return
+            prev_desig = person[3]
+            if prev_desig not in ('threat', 'victim', 'perpetrator'):
+                self._print(f"{ssn} is already {prev_desig.upper()} — no neutralization needed.", ok=False)
+                return
+            self.db.neutralize_subject(ssn, prev_desig,
+                                       operator_ssn=self._active_user_ssn, note=note)
+            self.feed_manager._designator.reset_neutralization_monitor(ssn)
+            name = person[2] or ssn
+            self._print(f"Neutralized {name} ({ssn}) — {prev_desig.upper()} → IRRELEVANT.")
 
         else:
             self._print(f"Unknown profiler command: '{sub}'", ok=False)
