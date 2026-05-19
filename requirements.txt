@@ -10,7 +10,7 @@ Cython==3.2.4
 easydict==1.13
 flatbuffers==25.12.19
 fonttools==4.62.1
-idna==3.11
+idna==3.15
 ImageIO==2.37.3
 insightface==0.7.3
 joblib==1.5.3
