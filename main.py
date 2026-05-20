@@ -28,8 +28,18 @@ def main():
         for dev in selected:
             manager.add_feed(dev['index'])
     else:
-        # Operator skipped selection — fall back to device 0
-        manager.add_feed(0)
+        # Operator skipped selection — restore feed ID 0 from saved config,
+        # or fall back to device index 0 if no config exists yet.
+        saved = manager._config.get_all()
+        if saved and 0 in saved:
+            entry = saved[0]
+            src = entry.get('source', 0)
+            # JSON stores everything as strings; coerce back to int for local devices.
+            if isinstance(src, str) and src.isdigit():
+                src = int(src)
+            manager.add_feed(src)
+        else:
+            manager.add_feed(0)
 
     window = MainWindow(manager, db, antispoof)
     window.show()

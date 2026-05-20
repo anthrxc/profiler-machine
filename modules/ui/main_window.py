@@ -117,6 +117,9 @@ class FeedDisplay(QLabel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ConsoleWidget(QWidget):
+    # Emitted by background threads to print safely on the main thread.
+    _print_signal = pyqtSignal(str, bool)
+
     def __init__(self, feed_manager, db, main_window, antispoof=None):
         super().__init__()
         self.feed_manager = feed_manager
@@ -137,6 +140,14 @@ class ConsoleWidget(QWidget):
         self.setFixedHeight(CONSOLE_H)
         self.setStyleSheet("background-color: #0a0a0a;")
         self._init_ui()
+
+        # Thread-safe bridge: background threads emit _print_signal,
+        # Qt delivers it on the main thread before touching any widget.
+        self._print_signal.connect(self._print)
+
+    def print_from_thread(self, text, ok=True):
+        """Thread-safe console print. Safe to call from any thread."""
+        self._print_signal.emit(text, ok)
 
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -610,12 +621,12 @@ class ConsoleWidget(QWidget):
             feeds = self.feed_manager.list_feeds_with_config()
             if feeds:
                 self._print(f"{len(feeds)} active feed(s):")
-                for fid, source, flip_h, flip_v in feeds:
+                for fid, source, flip_h, flip_v, status in feeds:
                     flags = []
                     if flip_h: flags.append("fliph")
                     if flip_v: flags.append("flipv")
                     flag_str = f"  [{', '.join(flags)}]" if flags else ""
-                    self._print(f"  Feed {fid}: {source}{flag_str}")
+                    self._print(f"  Feed {fid}: {source}{flag_str}  [{status.upper()}]")
             else:
                 self._print("No active feeds.")
 
@@ -1369,6 +1380,10 @@ class IntroSequence(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MainWindow(QWidget):
+    # Emitted (from any thread) when a feed needs authentication.
+    # Delivered on the main thread via Qt's queued-connection mechanism.
+    auth_request = pyqtSignal(int)   # feed_id
+
     def __init__(self, feed_manager, db, antispoof=None):
         super().__init__()
         self.feed_manager = feed_manager
@@ -1380,7 +1395,15 @@ class MainWindow(QWidget):
         self._init_ui()
 
         # Give the alert engine a console callback now that the console exists
-        self.feed_manager.set_console(self._console._print)
+        self.feed_manager.set_console(self._console.print_from_thread)
+
+        # Wire auth callback: VideoStream thread → Qt signal → main-thread slot.
+        # The lambda captures self; emit() from a worker thread is safe in PyQt5 —
+        # Qt queues the call and delivers it on the main thread event loop.
+        self.auth_request.connect(self._handle_auth_request)
+        self.feed_manager.set_auth_request_cb(
+            lambda fid: self.auth_request.emit(fid)
+        )
 
         # Floating alert window
         self._alert_window = AlertWindow()
@@ -1430,6 +1453,31 @@ class MainWindow(QWidget):
             play_sound(os.path.join('assets', 'audio', 'alert.wav'))
         except Exception:
             pass
+
+    def _handle_auth_request(self, feed_id):
+        """Show the credential dialog for a feed that failed to authenticate.
+
+        Called on the main thread via the auth_request signal.
+        """
+        from modules.ui.auth_dialog import show_auth_dialog
+        cfg    = self.feed_manager._config.get_feed(feed_id)
+        source = cfg.get('source', 'Unknown') if cfg else 'Unknown'
+
+        self._console._print(
+            f"Feed {feed_id} authentication required — opening credential dialog.",
+            ok=False
+        )
+
+        result = show_auth_dialog(source, feed_id, parent=self)
+        if result is not None:
+            username, password = result
+            self.feed_manager.provide_credentials(feed_id, username, password)
+            self._console._print(f"Feed {feed_id}: credentials submitted, retrying...")
+        else:
+            self._console._print(
+                f"Feed {feed_id}: auth skipped — retrying without credentials.",
+                ok=False
+            )
 
     def _init_ui(self):
         self.setWindowFlags(Qt.FramelessWindowHint)
