@@ -1,6 +1,12 @@
 import sys
 import os
 
+# Install stdout/stderr intercept FIRST — captures all print() output from here on.
+from modules.core.logger import get_logger as _get_logger
+_logger = _get_logger()
+_logger.install_intercept()
+_logger.open_log_file(os.path.join('logs', 'profiler_machine.log'))
+
 # Import onnxruntime-dependent libs BEFORE QApplication initializes
 from insightface.app import FaceAnalysis
 
@@ -26,9 +32,6 @@ def main():
     manager = FeedManager(app, db, body_detector=body_detector)
 
     if restore:
-        # Restore exactly the feeds that were active at restart time.
-        # session is loaded here temporarily just to get active_feeds;
-        # it is loaded again below (after clear()) for UI state.
         sess_feeds = session.load().get('active_feeds', [])
         if sess_feeds:
             for entry in sess_feeds:
@@ -41,7 +44,6 @@ def main():
         else:
             manager.add_feed(0)
     else:
-        # Normal startup — show device picker.
         selected = pick_devices(devices)
         if selected:
             for dev in selected:
@@ -57,7 +59,6 @@ def main():
             else:
                 manager.add_feed(0)
 
-    # Load persisted session state (only meaningful on restore).
     sess = session.load() if restore else {}
     session.clear()
 
