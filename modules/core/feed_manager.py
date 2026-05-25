@@ -7,6 +7,7 @@ from modules.io.videostream import VideoStream
 from modules.profiler.designation import Designator
 from modules.profiler.alerts import AlertEngine
 from modules.core.feeds_config import FeedsConfig
+from modules.core import hot_reload
 
 
 class FeedManager:
@@ -238,3 +239,44 @@ class FeedManager:
         """Return the currently focused feed_id, or None for grid view."""
         with self._lock:
             return self._focused
+
+    # -------------------------------------------------------------------------
+    # Hot reload
+    # -------------------------------------------------------------------------
+
+    def reload_all(self):
+        """Hot-reload all safe modules and assets.
+
+        Overlays, infocard, heuristics, antispoof.
+        Returns (success: bool, report: list[str]).
+        """
+        report = []
+        all_ok = True
+
+        # Reload overlays (asset reload, no importlib)
+        roles = self._designator.reload_overlays()
+        report.append(f"[RELOAD] overlays → {len(roles)} role(s)")
+
+        # Reload infocard
+        ok, msg = hot_reload.reload_module('infocard')
+        report.append(msg)
+        all_ok = all_ok and ok
+
+        # Reload heuristics
+        ok, msg = hot_reload.reload_module('heuristics')
+        report.append(msg)
+        all_ok = all_ok and ok
+
+        # Reload antispoof module + reinit model in designator
+        ok, msg = hot_reload.reload_module('antispoof')
+        report.append(msg)
+        if ok:
+            self._designator.reload_antispoof()
+            report[-1] = report[-1][:-3] + "model reinit → ok"
+        all_ok = all_ok and ok
+
+        return all_ok, report
+
+    def scan_new_modules(self):
+        """Return dotted names of .py files in modules/ not yet imported."""
+        return hot_reload.scan_new_modules()

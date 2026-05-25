@@ -9,11 +9,6 @@
       "source": "rtsp://localhost:8554/mystream",
       "flip_h": false,
       "flip_v": false
-    },
-    "2": {
-      "source": "rtsp://localhost:8554/mystream",
-      "flip_h": false,
-      "flip_v": false
     }
   }
 }

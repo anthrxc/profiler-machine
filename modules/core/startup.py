@@ -48,7 +48,7 @@ def _pad_dots(text):
 class LoadingScreen(QWidget):
     _close_signal = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, restore=False):
         super().__init__()
         self._step_states = []
         self._lock = threading.Lock()
@@ -56,6 +56,7 @@ class LoadingScreen(QWidget):
         self._done = False
         self._result = {}
         self._sound_done = threading.Event()
+        self._restore = restore
 
         self._init_ui()
 
@@ -77,7 +78,8 @@ class LoadingScreen(QWidget):
         layout.setSpacing(0)
         self.setLayout(layout)
 
-        title = QLabel("PROFILER MACHINE // SYSTEM INITIALIZATION")
+        mode_label = "SYSTEM RESTORE" if getattr(self, "_restore", False) else "SYSTEM INITIALIZATION"
+        title = QLabel(f"PROFILER MACHINE // {mode_label}")
         title.setFont(QFont("Courier New", 13))
         title.setStyleSheet("color: #ffffff;")
         layout.addWidget(title)
@@ -186,12 +188,14 @@ class LoadingScreen(QWidget):
 
         # SYSTEM
         self._begin_step(STEPS[0])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # FEED_MANAGER
         self._begin_step(STEPS[1])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # AUDIO
@@ -226,7 +230,8 @@ class LoadingScreen(QWidget):
 
         # INTERFACE
         self._begin_step(STEPS[4])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # FACIAL_DETECTION
@@ -291,7 +296,9 @@ class LoadingScreen(QWidget):
 
         # AUTO_ENROLL
         self._begin_step(STEPS[9])
-        if db is not None and app is not None:
+        if self._restore:
+            self._complete_step()  # skip on restore
+        elif db is not None and app is not None:
             try:
                 results = db.enroll_startup_images(app)
                 if results:
@@ -319,7 +326,8 @@ class LoadingScreen(QWidget):
 
         # THREAT_ASSESSMENT
         self._begin_step(STEPS[11])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # Check for failures — body detector failure is tolerated (degrades to
@@ -330,7 +338,7 @@ class LoadingScreen(QWidget):
             self._sound_done.set()
             return None, None, None, None
 
-        if play_sound is not None:
+        if play_sound is not None and not self._restore:
             def _play_and_signal():
                 play_sound("assets/audio/startup.wav")
                 self._sound_done.set()
@@ -370,8 +378,8 @@ class LoadingScreen(QWidget):
         return self._result.get('devices', [])
 
 
-def run(qt_app):
-    screen = LoadingScreen()
+def run(qt_app, restore=False):
+    screen = LoadingScreen(restore=restore)
 
     geo = qt_app.desktop().screenGeometry()
     screen.move(
