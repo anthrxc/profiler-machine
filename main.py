@@ -1,4 +1,5 @@
 import sys
+import os
 
 # Import onnxruntime-dependent libs BEFORE QApplication initializes
 from insightface.app import FaceAnalysis
@@ -6,32 +7,61 @@ from insightface.app import FaceAnalysis
 from PyQt5.QtWidgets import QApplication
 from modules.core.startup import run
 from modules.core.feed_manager import FeedManager
+from modules.core import session
 from modules.ui.main_window import MainWindow
 from modules.ui.device_picker import pick_devices
 
 
 def main():
+    restore = '--restore' in sys.argv
+
     qt_app = QApplication(sys.argv)
 
     # Loading screen — blocks until warmup complete.
-    # Device scan runs silently in the background during warmup.
-    app, db, antispoof, body_detector, devices = run(qt_app)
+    app, db, antispoof, body_detector, devices = run(qt_app, restore=restore)
 
     if app is None or db is None:
         sys.exit(1)
 
     manager = FeedManager(app, db, body_detector=body_detector)
 
-    # Show device picker — operator selects which feeds to initialize.
-    selected = pick_devices(devices)
-    if selected:
-        for dev in selected:
-            manager.add_feed(dev['index'])
+    if restore:
+        # Restore exactly the feeds that were active at restart time.
+        # session is loaded here temporarily just to get active_feeds;
+        # it is loaded again below (after clear()) for UI state.
+        sess_feeds = session.load().get('active_feeds', [])
+        if sess_feeds:
+            for entry in sess_feeds:
+                src_val = entry.get('source', 0)
+                if isinstance(src_val, str) and src_val.isdigit():
+                    src_val = int(src_val)
+                manager.add_feed(src_val,
+                                 flip_h=entry.get('flip_h', False),
+                                 flip_v=entry.get('flip_v', False))
+        else:
+            manager.add_feed(0)
     else:
-        # Operator skipped selection — fall back to device 0
-        manager.add_feed(0)
+        # Normal startup — show device picker.
+        selected = pick_devices(devices)
+        if selected:
+            for dev in selected:
+                manager.add_feed(dev['index'])
+        else:
+            saved = manager._config.get_all()
+            if saved and 0 in saved:
+                entry = saved[0]
+                src = entry.get('source', 0)
+                if isinstance(src, str) and src.isdigit():
+                    src = int(src)
+                manager.add_feed(src)
+            else:
+                manager.add_feed(0)
 
-    window = MainWindow(manager, db, antispoof)
+    # Load persisted session state (only meaningful on restore).
+    sess = session.load() if restore else {}
+    session.clear()
+
+    window = MainWindow(manager, db, antispoof, session=sess)
     window.show()
 
     sys.exit(qt_app.exec_())

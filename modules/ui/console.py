@@ -182,6 +182,7 @@ class Console(QWidget):
             print("\n[ADMIN/ROOT ONLY]")
             print("  feed              Manage video feeds (add/remove/focus/grid/list)")
             print("  profiler          Manage person database (login/list/info/enroll/update)")
+            print("  reload            Hot-reload modules/assets without restarting")
 
         # Unauthenticated users can still log in
         if designation is None:
@@ -214,6 +215,12 @@ class Console(QWidget):
                 "    help              Show all available commands\n"
                 "    help feed         Show detailed help for 'feed' command\n"
                 "    help profiler     Show detailed help for 'profiler' command"
+            ),
+            "reload": (
+                "RELOAD — Hot-reload all safe modules and assets (admin/root only)\n"
+                "  Syntax: reload\n"
+                "  Reloads: overlays (PNGs), infocard, heuristics, antispoof (module + model)\n"
+                "  Also scans modules/ for newly-added .py files (reported but not auto-imported)."
             ),
             "feed": (
                 "FEED — Manage video input feeds (admin/root only)\n"
@@ -252,6 +259,7 @@ class Console(QWidget):
 
     def _on_submit(self):
         text = self._input.text().strip()
+        print(f"[DEBUG] _on_submit called with: {text}")
         self._input.clear()
         if not text:
             return
@@ -271,6 +279,8 @@ class Console(QWidget):
         self._handle_command(text)
 
     def _handle_command(self, cmd):
+        print(f"[DEBUG] Command: {cmd}")
+
         parts = cmd.strip().split()
         primary = parts[0].lower()
         args = parts[1:]
@@ -306,6 +316,12 @@ class Console(QWidget):
                 self._set_status("Usage: profiler [enroll/update/list/info/login]", ok=False)
                 return
             self._handle_profiler(args)
+
+        elif primary == "reload":
+            if not self._is_root():
+                self._set_status("Access denied. Root required for reload.", ok=False)
+                return
+            self._handle_reload(args)
 
         else:
             self._set_status(f"Unknown command: '{primary}'", ok=False)
@@ -495,3 +511,22 @@ class Console(QWidget):
 
         else:
             self._set_status(f"Unknown profiler command: '{sub}'", ok=False)
+
+    def _handle_reload(self, args):
+        """Hot-reload overlays, infocard, heuristics, antispoof."""
+        all_ok, report = self.feed_manager.reload_all()
+        new_mods = self.feed_manager.scan_new_modules()
+
+        print("\n--- HOT RELOAD ---")
+        for line in report:
+            print(f"  {line}")
+        if new_mods:
+            print("  New modules detected (not imported):")
+            for m in new_mods[:5]:
+                print(f"    {m}")
+            if len(new_mods) > 5:
+                print(f"    ... and {len(new_mods) - 5} more")
+        print()
+
+        status = "Reload complete." if all_ok else "Some reloads failed. See terminal."
+        self._set_status(status, ok=all_ok)

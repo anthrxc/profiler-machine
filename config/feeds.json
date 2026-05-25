@@ -4,6 +4,11 @@
       "source": 1,
       "flip_h": true,
       "flip_v": false
+    },
+    "1": {
+      "source": "rtsp://localhost:8554/mystream",
+      "flip_h": false,
+      "flip_v": false
     }
   }
 }

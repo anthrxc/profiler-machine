@@ -26,6 +26,20 @@ class FeedsConfig:
         """Return a copy of all feed configs as {feed_id: dict}."""
         return dict(self._feeds)
 
+    def find_by_source(self, source):
+        """Return the config dict for the most recently saved entry matching source, or None.
+
+        Used by FeedManager.add_feed() to inherit flip flags from a previous session.
+        Comparison is by string value; integer device indices are coerced to str.
+        """
+        target = str(source)
+        match = None
+        for fid in sorted(self._feeds.keys(), reverse=True):
+            if str(self._feeds[fid].get('source', '')) == target:
+                match = self._feeds[fid]
+                break
+        return match
+
     def add_feed(self, feed_id, source, flip_h=False, flip_v=False):
         self._feeds[feed_id] = {
             'source': source,

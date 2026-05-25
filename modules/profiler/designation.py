@@ -860,3 +860,26 @@ class Designator:
             result = self._auth_result
             self._auth_result = None
             return result
+    # -------------------------------------------------------------------------
+    # Hot reload
+    # -------------------------------------------------------------------------
+
+    def reload_overlays(self):
+        """Reload overlay PNGs from disk without touching tracking state.
+
+        Safe to call from any thread — replaces the overlay dict atomically.
+        Returns the list of roles successfully loaded.
+        """
+        new_overlays = self._load_overlays()
+        with self._lock:
+            self._overlays = new_overlays
+        return list(new_overlays.keys())
+
+    def reload_antispoof(self):
+        """Reinitialise AntiSpoofModel from the existing ONNX weights on disk.
+
+        Replaces self.antispoof in-place. Safe to call while the detection
+        thread is running — the thread only reads self.antispoof, never holds
+        a local reference across frames.
+        """
+        self.antispoof = AntiSpoofModel(model_path=ANTISPOOF_WEIGHTS, scale=2.7)

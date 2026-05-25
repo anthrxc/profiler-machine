@@ -1,3 +1,4 @@
+import sys
 # modules/ui/main_window.py
 # Main application window with docked console and profiler panel.
 
@@ -9,6 +10,7 @@ import random
 import threading
 import numpy as np
 
+from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QScrollArea, QLineEdit, QFrame
@@ -17,6 +19,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap, QColor, QPainter
 
 from modules.profiler.recognition import DESIGNATIONS, IMAGES_DIR
+from modules.core import session as _session
 from modules.ui.profiler_panel import ProfilerPanel, PANEL_W
 
 WINDOW_W        = 1000
@@ -117,6 +120,9 @@ class FeedDisplay(QLabel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ConsoleWidget(QWidget):
+    # Emitted by background threads to print safely on the main thread.
+    _print_signal = pyqtSignal(str, bool)
+
     def __init__(self, feed_manager, db, main_window, antispoof=None):
         super().__init__()
         self.feed_manager = feed_manager
@@ -126,6 +132,7 @@ class ConsoleWidget(QWidget):
 
         self._active_user_ssn = None
         self._last_seen_time = None
+        self._restore_grace_until = 0.0  # epoch time; auth timeout suppressed until then
         self._logout_timer = QTimer()
         self._logout_timer.timeout.connect(self._check_auth_timeout)
         self._logout_timer.start(500)
@@ -137,6 +144,14 @@ class ConsoleWidget(QWidget):
         self.setFixedHeight(CONSOLE_H)
         self.setStyleSheet("background-color: #0a0a0a;")
         self._init_ui()
+
+        # Thread-safe bridge: background threads emit _print_signal,
+        # Qt delivers it on the main thread before touching any widget.
+        self._print_signal.connect(self._print)
+
+    def print_from_thread(self, text, ok=True):
+        """Thread-safe console print. Safe to call from any thread."""
+        self._print_signal.emit(text, ok)
 
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -332,6 +347,9 @@ class ConsoleWidget(QWidget):
     def _check_auth_timeout(self):
         if self._active_user_ssn is None:
             return
+        # Suppress logout during post-restore grace period
+        if time.time() < self._restore_grace_until:
+            return
         in_frame = self.feed_manager._designator.is_ssn_in_frame(self._active_user_ssn)
         if in_frame:
             self._last_seen_time = None
@@ -480,6 +498,12 @@ class ConsoleWidget(QWidget):
                 return
             self._handle_profiler(args)
 
+        elif primary == "restart":
+            if not self._is_root():
+                self._print("Access denied. Root required for restart.", ok=False)
+                return
+            self._handle_restart()
+
         else:
             self._print(f"Unknown command: '{primary}'", ok=False)
 
@@ -610,12 +634,12 @@ class ConsoleWidget(QWidget):
             feeds = self.feed_manager.list_feeds_with_config()
             if feeds:
                 self._print(f"{len(feeds)} active feed(s):")
-                for fid, source, flip_h, flip_v in feeds:
+                for fid, source, flip_h, flip_v, status in feeds:
                     flags = []
                     if flip_h: flags.append("fliph")
                     if flip_v: flags.append("flipv")
                     flag_str = f"  [{', '.join(flags)}]" if flags else ""
-                    self._print(f"  Feed {fid}: {source}{flag_str}")
+                    self._print(f"  Feed {fid}: {source}{flag_str}  [{status.upper()}]")
             else:
                 self._print("No active feeds.")
 
@@ -855,6 +879,44 @@ class ConsoleWidget(QWidget):
 
         else:
             self._print(f"Unknown profiler command: '{sub}'", ok=False)
+
+    def _handle_restart(self):
+        """Save session state and restart the process."""
+        import subprocess
+        import time
+
+        self._print("Saving session...")
+
+        # Capture active feeds before stopping anything
+        active_feeds = self.feed_manager.list_feeds_with_config()
+
+        # Save transient state including currently active feeds
+        _session.save(
+            active_user_ssn=self._active_user_ssn,
+            tracked_ssn=self.feed_manager._designator.get_tracked_ssn(),
+            focused_feed_id=self.feed_manager.get_focused(),
+            active_feeds=[
+                {'source': src, 'flip_h': fh, 'flip_v': fv}
+                for _, src, fh, fv, _ in active_feeds
+            ],
+        )
+
+        # Stop all feeds BEFORE spawning — releases webcam handles
+        self._print("Releasing feeds...")
+        self.feed_manager.stop()
+
+        # Brief pause so OS releases the device before new process opens it
+        time.sleep(0.5)
+
+        self._print("Restarting...")
+        subprocess.Popen(
+            [sys.executable, 'main.py', '--restore'],
+            cwd=os.getcwd(),
+        )
+
+        # Prevent MainWindow.closeEvent from calling feed_manager.stop() again
+        self._main_window._feeds_already_stopped = True
+        self._main_window.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1369,7 +1431,11 @@ class IntroSequence(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MainWindow(QWidget):
-    def __init__(self, feed_manager, db, antispoof=None):
+    # Emitted (from any thread) when a feed needs authentication.
+    # Delivered on the main thread via Qt's queued-connection mechanism.
+    auth_request = pyqtSignal(int)   # feed_id
+
+    def __init__(self, feed_manager, db, antispoof=None, session=None):
         super().__init__()
         self.feed_manager = feed_manager
         self.db = db
@@ -1379,8 +1445,28 @@ class MainWindow(QWidget):
 
         self._init_ui()
 
+        # Restore session state from previous process (--restore only)
+        if session:
+            if session.get('active_user_ssn'):
+                self._console._active_user_ssn = session['active_user_ssn']
+                # Grace period: suppress auth timeout for 20s to give
+                # face detection time to re-acquire the restored user
+                self._console._restore_grace_until = time.time() + 20.0
+            if session.get('tracked_ssn'):
+                self.feed_manager._designator.set_tracked_ssn(session['tracked_ssn'])
+            if session.get('focused_feed_id') is not None:
+                self.feed_manager.focus_feed(session['focused_feed_id'])
+
         # Give the alert engine a console callback now that the console exists
-        self.feed_manager.set_console(self._console._print)
+        self.feed_manager.set_console(self._console.print_from_thread)
+
+        # Wire auth callback: VideoStream thread → Qt signal → main-thread slot.
+        # The lambda captures self; emit() from a worker thread is safe in PyQt5 —
+        # Qt queues the call and delivers it on the main thread event loop.
+        self.auth_request.connect(self._handle_auth_request)
+        self.feed_manager.set_auth_request_cb(
+            lambda fid: self.auth_request.emit(fid)
+        )
 
         # Floating alert window
         self._alert_window = AlertWindow()
@@ -1430,6 +1516,31 @@ class MainWindow(QWidget):
             play_sound(os.path.join('assets', 'audio', 'alert.wav'))
         except Exception:
             pass
+
+    def _handle_auth_request(self, feed_id):
+        """Show the credential dialog for a feed that failed to authenticate.
+
+        Called on the main thread via the auth_request signal.
+        """
+        from modules.ui.auth_dialog import show_auth_dialog
+        cfg    = self.feed_manager._config.get_feed(feed_id)
+        source = cfg.get('source', 'Unknown') if cfg else 'Unknown'
+
+        self._console._print(
+            f"Feed {feed_id} authentication required — opening credential dialog.",
+            ok=False
+        )
+
+        result = show_auth_dialog(source, feed_id, parent=self)
+        if result is not None:
+            username, password = result
+            self.feed_manager.provide_credentials(feed_id, username, password)
+            self._console._print(f"Feed {feed_id}: credentials submitted, retrying...")
+        else:
+            self._console._print(
+                f"Feed {feed_id}: auth skipped — retrying without credentials.",
+                ok=False
+            )
 
     def _init_ui(self):
         self.setWindowFlags(Qt.FramelessWindowHint)
@@ -1593,5 +1704,8 @@ class MainWindow(QWidget):
     def closeEvent(self, event):
         self._alert_window.close()
         self._feed_timer.stop()
-        self.feed_manager.stop()
+        self._console._logout_timer.stop()
+        if not getattr(self, '_feeds_already_stopped', False):
+            self.feed_manager.stop()
         event.accept()
+        os._exit(0)
