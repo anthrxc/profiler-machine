@@ -21,6 +21,7 @@ STEPS = [
     "MACHINE.UI.INTERFACE",
     "MACHINE.PROFILER.FACIAL_DETECTION",
     "MACHINE.PROFILER.FACIAL_RECOGNITION",
+    "MACHINE.PROFILER.BODY_DETECTION",
     "MACHINE.PROFILER.DATABASE",
     "MACHINE.PROFILER.AUTO_ENROLL",
     "MACHINE.PROFILER.ANTISPOOF",
@@ -47,7 +48,7 @@ def _pad_dots(text):
 class LoadingScreen(QWidget):
     _close_signal = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, restore=False):
         super().__init__()
         self._step_states = []
         self._lock = threading.Lock()
@@ -55,6 +56,7 @@ class LoadingScreen(QWidget):
         self._done = False
         self._result = {}
         self._sound_done = threading.Event()
+        self._restore = restore
 
         self._init_ui()
 
@@ -76,7 +78,8 @@ class LoadingScreen(QWidget):
         layout.setSpacing(0)
         self.setLayout(layout)
 
-        title = QLabel("PROFILER MACHINE // SYSTEM INITIALIZATION")
+        mode_label = "SYSTEM RESTORE" if getattr(self, "_restore", False) else "SYSTEM INITIALIZATION"
+        title = QLabel(f"PROFILER MACHINE // {mode_label}")
         title.setFont(QFont("Courier New", 13))
         title.setStyleSheet("color: #ffffff;")
         layout.addWidget(title)
@@ -166,7 +169,9 @@ class LoadingScreen(QWidget):
             return any(s['status'] == 'fail' for s in self._step_states)
 
     def _warmup_wrapper(self):
-        self._result['app'], self._result['db'], self._result['antispoof'] = self._warmup()
+        (self._result['app'], self._result['db'],
+         self._result['antispoof'], self._result['body_detector'],
+         self._result['devices']) = self._warmup()
         with self._lock:
             self._done = True
         self._sound_done.wait(timeout=10)
@@ -178,15 +183,19 @@ class LoadingScreen(QWidget):
         app = None
         db = None
         antispoof = None
+        body_detector = None
+        devices = []
 
         # SYSTEM
         self._begin_step(STEPS[0])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # FEED_MANAGER
         self._begin_step(STEPS[1])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # AUDIO
@@ -198,12 +207,22 @@ class LoadingScreen(QWidget):
             print(f"[{_timestamp()}] MACHINE.IO.AUDIO ERROR: {e}")
             self._fail_step()
 
-        # VIDEO_STREAM
+        # VIDEO_STREAM — open a test capture AND silently scan all devices
         self._begin_step(STEPS[3])
         try:
             import cv2
             cap = cv2.VideoCapture(0)
             cap.release()
+            # Scan for available devices in the background while warmup continues.
+            # Results are ready by the time the loading screen closes.
+            from modules.core.device_enumerator import enumerate_devices
+            import threading as _threading
+            _scan_done = threading.Event()
+            def _scan():
+                nonlocal devices
+                devices = enumerate_devices()
+                _scan_done.set()
+            _threading.Thread(target=_scan, daemon=True).start()
             self._complete_step()
         except Exception as e:
             print(f"[{_timestamp()}] MACHINE.IO.VIDEO_STREAM ERROR: {e}")
@@ -211,7 +230,8 @@ class LoadingScreen(QWidget):
 
         # INTERFACE
         self._begin_step(STEPS[4])
-        time.sleep(0.5)
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
         # FACIAL_DETECTION
@@ -242,8 +262,27 @@ class LoadingScreen(QWidget):
         else:
             self._fail_step()
 
-        # DATABASE
+        # BODY_DETECTION
+        # Loaded here, before QApplication owns the main thread, for the same
+        # CUDA-DLL-ordering reason as InsightFace. A failure here is non-fatal
+        # — the Designator degrades gracefully to face-only tracking.
         self._begin_step(STEPS[7])
+        try:
+            from modules.profiler.body_detector import BodyDetector
+            body_detector = BodyDetector()
+            ok = body_detector.load()
+            if ok:
+                self._complete_step()
+            else:
+                body_detector = None
+                self._fail_step()
+        except Exception as e:
+            print(f"[{_timestamp()}] MACHINE.PROFILER.BODY_DETECTION ERROR: {e}")
+            body_detector = None
+            self._fail_step()
+
+        # DATABASE
+        self._begin_step(STEPS[8])
         try:
             from modules.profiler.recognition import RecognitionDB
             db = RecognitionDB()
@@ -256,8 +295,10 @@ class LoadingScreen(QWidget):
             self._fail_step()
 
         # AUTO_ENROLL
-        self._begin_step(STEPS[8])
-        if db is not None and app is not None:
+        self._begin_step(STEPS[9])
+        if self._restore:
+            self._complete_step()  # skip on restore
+        elif db is not None and app is not None:
             try:
                 results = db.enroll_startup_images(app)
                 if results:
@@ -274,7 +315,7 @@ class LoadingScreen(QWidget):
             self._fail_step()
 
         # ANTISPOOF
-        self._begin_step(STEPS[9])
+        self._begin_step(STEPS[10])
         try:
             from modules.profiler.antispoof import AntiSpoofModel
             antispoof = AntiSpoofModel(ANTISPOOF_MODEL_PATH)
@@ -284,18 +325,20 @@ class LoadingScreen(QWidget):
             self._fail_step()
 
         # THREAT_ASSESSMENT
-        self._begin_step(STEPS[10])
-        time.sleep(0.5)
+        self._begin_step(STEPS[11])
+        if not self._restore:
+            time.sleep(0.5)
         self._complete_step()
 
-        # Check for failures
-        if self._has_failures():
+        # Check for failures — body detector failure is tolerated (degrades to
+        # face-only) so we don't abort startup on its account.
+        if self._has_failures_excluding_body():
             print(f"[{_timestamp()}] System initialization failed. Exiting...")
             time.sleep(2.0)
             self._sound_done.set()
-            return None, None, None
+            return None, None, None, None
 
-        if play_sound is not None:
+        if play_sound is not None and not self._restore:
             def _play_and_signal():
                 play_sound("assets/audio/startup.wav")
                 self._sound_done.set()
@@ -303,7 +346,21 @@ class LoadingScreen(QWidget):
         else:
             self._sound_done.set()
 
-        return app, db, antispoof
+        # Ensure device scan is complete before we return
+        try:
+            _scan_done.wait(timeout=15)
+        except Exception:
+            pass
+
+        return app, db, antispoof, body_detector, devices
+
+    def _has_failures_excluding_body(self):
+        """A failed body detector is non-fatal — the Designator degrades to face-only."""
+        with self._lock:
+            for s in self._step_states:
+                if s['status'] == 'fail' and s['text'] != 'MACHINE.PROFILER.BODY_DETECTION':
+                    return True
+            return False
 
     def get_app(self):
         return self._result.get('app')
@@ -314,9 +371,15 @@ class LoadingScreen(QWidget):
     def get_antispoof(self):
         return self._result.get('antispoof')
 
+    def get_body_detector(self):
+        return self._result.get('body_detector')
 
-def run(qt_app):
-    screen = LoadingScreen()
+    def get_devices(self):
+        return self._result.get('devices', [])
+
+
+def run(qt_app, restore=False):
+    screen = LoadingScreen(restore=restore)
 
     geo = qt_app.desktop().screenGeometry()
     screen.move(
@@ -327,4 +390,6 @@ def run(qt_app):
     screen.show()
     qt_app.exec_()
 
-    return screen.get_app(), screen.get_db(), screen.get_antispoof()
+    return (screen.get_app(), screen.get_db(),
+            screen.get_antispoof(), screen.get_body_detector(),
+            screen.get_devices())

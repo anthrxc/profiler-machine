@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
 from modules.profiler.infocard import render_card_with_face_data, pil_to_qpixmap
+from modules.profiler.heuristics import generate as gen_heuristics
 
 PANEL_W = 650
 CARD_W  = 650
@@ -155,40 +156,32 @@ class ProfilerPanel(QWidget):
 
         designator = self.feed_manager._designator
         with designator._lock:
-            results_by_feed = {
-                fid: list(feed_results)
-                for fid, feed_results in designator._latest_results.items()
-            }
-
-        visible_by_feed = {fid: [] for fid in self.feed_manager.list_feeds()}
-        results = []
-
-        for fid, feed_results in results_by_feed.items():
-            for result in feed_results:
-                results.append(result)
-                if result.get('ssn'):
-                    if fid in visible_by_feed:
-                        visible_by_feed[fid].append(result['ssn'])
+            # _latest_results is {feed_id: [result dicts]}
+            all_results = []
+            visible_by_feed = {}
+            for fid, feed_results in designator._latest_results.items():
+                visible_by_feed[fid] = []
+                for r in feed_results:
+                    all_results.append(r)
+                    if r.get('ssn'):
+                        visible_by_feed[fid].append(r['ssn'])
 
         self._update_crime_chances(visible_by_feed)
 
         if self._mode == 'single' and self._single_ssn:
             ssns_to_show = [self._single_ssn]
         elif self._mode == 'all':
-            ssns_to_show = [r['ssn'] for r in results if r.get('ssn')]
+            ssns_to_show = [r['ssn'] for r in all_results if r.get('ssn')]
         else:
             return
 
         if not ssns_to_show:
             self._clear_cards()
-            self._status.setText(
-                "  No faces detected." if self._mode == 'all'
-                else f"  {self._single_ssn} not in frame."
-            )
+            self._status.setText("  No faces detected." if self._mode == 'all' else f"  {self._single_ssn} not in frame.")
             return
 
         self._status.setText(f"  {len(ssns_to_show)} profile(s) active.")
-        self._render_cards(ssns_to_show, results, visible_by_feed)
+        self._render_cards(ssns_to_show, all_results, visible_by_feed)
 
     def _clear_cards(self):
         for widget in self._card_widgets.values():
@@ -205,6 +198,9 @@ class ProfilerPanel(QWidget):
 
         face_data = {r['ssn']: r for r in results if r.get('ssn')}
 
+        # Snapshot the tracked SSN for this render pass
+        tracked_ssn = self.feed_manager._designator.get_tracked_ssn()
+
         for ssn in ssns_to_show:
             person = self.db.get_by_ssn(ssn)
             if not person:
@@ -213,9 +209,18 @@ class ProfilerPanel(QWidget):
             face_age = fd.get('face_age')
             face_sex = fd.get('face_sex')
             crime_chance = self._get_crime_chance_for_ssn(ssn, visible_by_feed)
+            is_tracked = (ssn == tracked_ssn)
 
             try:
-                card_img = render_card_with_face_data(person, face_age, face_sex, crime_chance)
+                in_frame = ssn in face_data
+                heuristics = gen_heuristics(ssn, person[3]) if in_frame else None
+                log = self.db.get_neutralization_log(ssn)
+                prev_designation = log[0][0] if log else None
+                card_img = render_card_with_face_data(
+                    person, face_age, face_sex, crime_chance,
+                    is_tracked=is_tracked, heuristics=heuristics,
+                    prev_designation=prev_designation,
+                )
                 pixmap = pil_to_qpixmap(card_img)
             except Exception as e:
                 print(f"[ProfilerPanel] Card render error for {ssn}: {e}")
