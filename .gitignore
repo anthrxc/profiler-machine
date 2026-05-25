@@ -7,4 +7,5 @@ modules/ui/__pycache__
 database
 __pycache__
 *.pyc
-config/feeds.json
+config
+logs

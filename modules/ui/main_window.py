@@ -20,7 +20,9 @@ from PyQt5.QtGui import QFont, QImage, QPixmap, QColor, QPainter
 
 from modules.profiler.recognition import DESIGNATIONS, IMAGES_DIR
 from modules.core import session as _session
+from modules.core.logger import get_logger as _get_logger
 from modules.ui.profiler_panel import ProfilerPanel, PANEL_W
+from modules.ui.log_viewer import LogViewerWindow
 
 WINDOW_W        = 1000
 FEED_H          = 568
@@ -284,6 +286,9 @@ class ConsoleWidget(QWidget):
         QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
             self._scroll.verticalScrollBar().maximum()
         ))
+        # Mirror to structured logger
+        level = 'info' if color != '#ff4444' else 'error'
+        _get_logger().log(text, level=level, module='console')
 
     def _print(self, text, ok=True):
         self._add_line(text, "#cccccc" if ok else "#ff4444")
@@ -429,7 +434,7 @@ class ConsoleWidget(QWidget):
 
         # ── Unauthenticated gate ──────────────────────────────────────────────
         # Only these commands work without a logged-in user.
-        ALWAYS_ALLOWED = {'help', 'quit', 'fullscreen'}
+        ALWAYS_ALLOWED = {'help', 'quit', 'fullscreen', 'logs'}
         if primary not in ALWAYS_ALLOWED:
             # Allow 'profiler login' unauthenticated; block everything else.
             if primary == 'profiler' and args and args[0].lower() == 'login':
@@ -451,6 +456,11 @@ class ConsoleWidget(QWidget):
         elif primary == "fullscreen":
             self._main_window.toggle_fullscreen()
             self._print("Toggled fullscreen.")
+
+        elif primary == "logs":
+            self._main_window.toggle_log_viewer()
+            state = "open" if self._main_window._log_viewer.isVisible() else "closed"
+            self._print(f"Log viewer {state}.")
 
         elif primary == "track":
             if not args:
@@ -524,6 +534,7 @@ class ConsoleWidget(QWidget):
         self._print("─" * 60)
         self._print("quit                    Exit the application")
         self._print("fullscreen              Toggle fullscreen display")
+        self._print("logs                    Toggle log viewer window")
         self._print("help                    Show this reference")
 
         if not self._active_user_ssn:
@@ -1471,6 +1482,9 @@ class MainWindow(QWidget):
         # Floating alert window
         self._alert_window = AlertWindow()
 
+        # Floating log viewer (hidden until 'logs' command)
+        self._log_viewer = LogViewerWindow()
+
         # Intro plays first — feed timer starts only after it finishes
         self._intro = IntroSequence(self, feed_manager, db)
         self._intro.finished.connect(self._on_intro_finished)
@@ -1582,6 +1596,16 @@ class MainWindow(QWidget):
         self._profiler_panel.setVisible(self._profiler_visible)
         new_w = WINDOW_W + (PANEL_W if self._profiler_visible else 0)
         self.setFixedSize(new_w, WINDOW_H)
+
+    def toggle_log_viewer(self):
+        if self._log_viewer.isVisible():
+            self._log_viewer.hide()
+        else:
+            # Position below the main window
+            geo = self.frameGeometry()
+            self._log_viewer.move(geo.left(), geo.bottom() + 8)
+            self._log_viewer.show()
+            self._log_viewer.raise_()
 
     def toggle_fullscreen(self):
         if self._is_fullscreen:
@@ -1703,9 +1727,14 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event):
         self._alert_window.close()
+        self._log_viewer.hide()
         self._feed_timer.stop()
         self._console._logout_timer.stop()
         if not getattr(self, '_feeds_already_stopped', False):
             self.feed_manager.stop()
+        try:
+            _get_logger().close()
+        except Exception:
+            pass
         event.accept()
         os._exit(0)
