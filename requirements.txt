@@ -34,7 +34,7 @@ opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
 packaging==26.0
 pillow==12.1.1
-playsound @ git+https://github.com/taconi/playsound@92385c78ec05c2fc3afad1afc5edc9d1282aa1e5
+playsound==1.2.2
 prettytable==3.17.0
 protobuf==7.34.1
 pydantic==2.12.5
