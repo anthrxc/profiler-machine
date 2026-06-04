@@ -124,6 +124,9 @@ class FeedDisplay(QLabel):
 class ConsoleWidget(QWidget):
     # Emitted by background threads to print safely on the main thread.
     _print_signal = pyqtSignal(str, bool)
+    # Emitted by the voice worker thread to dispatch a recognized command
+    # via the same path as a typed line. Delivered on the main thread.
+    _voice_dispatch_signal = pyqtSignal(str)
 
     def __init__(self, feed_manager, db, main_window, antispoof=None):
         super().__init__()
@@ -150,10 +153,27 @@ class ConsoleWidget(QWidget):
         # Thread-safe bridge: background threads emit _print_signal,
         # Qt delivers it on the main thread before touching any widget.
         self._print_signal.connect(self._print)
+        self._voice_dispatch_signal.connect(self._dispatch_voice_command)
 
     def print_from_thread(self, text, ok=True):
         """Thread-safe console print. Safe to call from any thread."""
         self._print_signal.emit(text, ok)
+
+    def dispatch_voice_command(self, command_text):
+        """Thread-safe entry: route a voice-recognized command to the
+        normal command pipeline. Safe to call from any thread."""
+        self._voice_dispatch_signal.emit(command_text)
+
+    def _dispatch_voice_command(self, command_text):
+        """Main-thread slot for voice-dispatched commands. Echoes the command
+        into history (so the operator can see what was executed) and runs it
+        through the same handler as a typed line."""
+        text = command_text.strip()
+        if not text:
+            return
+        self._add_line(f"🎤 > {text}", "#88ddff")
+        self._history.append(text)
+        self._handle_command(text)
 
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -434,7 +454,7 @@ class ConsoleWidget(QWidget):
 
         # ── Unauthenticated gate ──────────────────────────────────────────────
         # Only these commands work without a logged-in user.
-        ALWAYS_ALLOWED = {'help', 'quit', 'fullscreen', 'logs'}
+        ALWAYS_ALLOWED = {'help', 'quit', 'fullscreen', 'logs', 'voice'}
         if primary not in ALWAYS_ALLOWED:
             # Allow 'profiler login' unauthenticated; block everything else.
             if primary == 'profiler' and args and args[0].lower() == 'login':
@@ -461,6 +481,9 @@ class ConsoleWidget(QWidget):
             self._main_window.toggle_log_viewer()
             state = "open" if self._main_window._log_viewer.isVisible() else "closed"
             self._print(f"Log viewer {state}.")
+
+        elif primary == "voice":
+            self._handle_voice(args)
 
         elif primary == "track":
             if not args:
@@ -535,6 +558,7 @@ class ConsoleWidget(QWidget):
         self._print("quit                    Exit the application")
         self._print("fullscreen              Toggle fullscreen display")
         self._print("logs                    Toggle log viewer window")
+        self._print("voice on/off            Toggle voice command mode")
         self._print("help                    Show this reference")
 
         if not self._active_user_ssn:
@@ -559,6 +583,120 @@ class ConsoleWidget(QWidget):
                 self._print("[ROOT] profiler update <SSN> designation <value>")
 
         self._print("═" * 60)
+
+    def _handle_voice(self, args):
+        """voice on/off — toggle voice command mode.
+
+        Voice mode is a long-running worker thread owned by MainWindow that
+        listens via Whisper, classifies utterances through a TF-IDF intent
+        matcher, and dispatches resolved commands back through this console
+        via a thread-safe signal. Console typing remains available throughout.
+
+        Device selection: modify device_id=X in the VoiceMode() call below to
+        match your microphone. Run 'import sounddevice; print(sounddevice.query_devices())'
+        to list devices. Use WASAPI for best results on Windows.
+        """
+        if not args:
+            vm = getattr(self._main_window, '_voice_mode', None)
+            state = "on" if (vm is not None and vm.is_active()) else "off"
+            self._print(f"Voice mode: {state}")
+            self._print("Usage: voice on | voice off")
+            return
+
+        sub = args[0].lower()
+
+        if sub == "on":
+            vm = getattr(self._main_window, '_voice_mode', None)
+            if vm is not None and vm.is_active():
+                self._print("Voice mode already active.")
+                return
+            try:
+                from modules.voice import VoiceMode
+                import sounddevice as sd
+            except Exception as e:
+                self._print(f"Voice mode unavailable: {e}", ok=False)
+                self._print(
+                    "Install with: pip install openai-whisper pyttsx3 sounddevice",
+                    ok=False,
+                )
+                return
+
+            # Query available microphones.
+            # On Windows, WDM-KS incorrectly reports output devices as having
+            # input channels. Prefer WASAPI devices which report correctly.
+            try:
+                devices = sd.query_devices()
+                hostapis = sd.query_hostapis()
+                wasapi_idx = next(
+                    (i for i, h in enumerate(hostapis) if 'WASAPI' in h['name']),
+                    None,
+                )
+                input_devices = []
+                for i, d in enumerate(devices):
+                    if d.get('max_input_channels', 0) <= 0:
+                        continue
+                    if wasapi_idx is not None and d.get('hostapi') != wasapi_idx:
+                        continue
+                    input_devices.append((i, d['name']))
+                if not input_devices:
+                    input_devices = [
+                        (i, d['name']) for i, d in enumerate(devices)
+                        if d.get('max_input_channels', 0) > 0
+                    ]
+            except Exception as e:
+                self._print(f"Failed to query microphones: {e}", ok=False)
+                return
+
+            if not input_devices:
+                self._print("No microphone devices found.", ok=False)
+                return
+
+            # Reuse the previously selected device if available.
+            # Pass 'voice reset' to force the picker to reappear.
+            saved_device = getattr(self._main_window, '_voice_device_id', None)
+            force_pick = args and args[0].lower() == 'reset'
+
+            if saved_device is not None and not force_pick:
+                # Verify it still exists in the current device list.
+                if any(did == saved_device for did, _ in input_devices):
+                    device_id = saved_device
+                    self._print(f"Voice mode: using saved microphone device {device_id}")
+                else:
+                    saved_device = None
+
+            if saved_device is None or force_pick:
+                from modules.ui.microphone_picker import pick_microphone
+                device_id = pick_microphone(input_devices, parent=self._main_window)
+                if device_id is None:
+                    self._print("Voice mode startup cancelled.")
+                    return
+                self._main_window._voice_device_id = device_id
+                self._print(f"Voice mode: microphone device {device_id} saved.")
+
+            self._print("Starting voice mode (this can take ~10s on first run)...")
+
+            def _on_stopped():
+                self.print_from_thread("Voice mode stopped.", True)
+
+            vm = VoiceMode(
+                print_cb=self.print_from_thread,
+                dispatch_cb=self.dispatch_voice_command,
+                on_stopped_cb=_on_stopped,
+                device_id=device_id,
+            )
+            self._main_window._voice_mode = vm
+            vm.start()
+
+        elif sub == "off":
+            vm = getattr(self._main_window, '_voice_mode', None)
+            if vm is None or not vm.is_active():
+                self._print("Voice mode is not active.")
+                return
+            self._print("Stopping voice mode...")
+            vm.stop()
+
+        else:
+            self._print("Usage: voice on | voice off", ok=False)
 
     def _handle_alert(self, args):
         from modules.profiler.alerts import parse_condition, ALERT_SOUND_PATH
@@ -1453,6 +1591,8 @@ class MainWindow(QWidget):
         self._antispoof = antispoof
         self._is_fullscreen = False
         self._profiler_visible = False
+        self._voice_mode = None       # set by ConsoleWidget._handle_voice('on')
+        self._voice_device_id = None  # persists mic selection across restarts
 
         self._init_ui()
 
@@ -1726,6 +1866,12 @@ class MainWindow(QWidget):
         super().moveEvent(event)
 
     def closeEvent(self, event):
+        # Stop voice mode worker thread before tearing down audio/UI.
+        if getattr(self, '_voice_mode', None) is not None:
+            try:
+                self._voice_mode.stop()
+            except Exception:
+                pass
         self._alert_window.close()
         self._log_viewer.hide()
         self._feed_timer.stop()
