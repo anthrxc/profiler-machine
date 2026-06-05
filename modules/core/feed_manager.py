@@ -241,6 +241,55 @@ class FeedManager:
             return self._focused
 
     # -------------------------------------------------------------------------
+    # Web API data access  (called from internal_api.py threads)
+    # -------------------------------------------------------------------------
+
+    def get_visible_ssns(self):
+        """Return a snapshot set of all SSNs currently visible in any feed."""
+        with self._designator._lock:
+            return set(self._designator._visible_ssns)
+
+    def get_ssn_feed(self, ssn):
+        """Return the feed_id where SSN is currently visible, or None."""
+        with self._designator._lock:
+            for feed_id, results in self._designator._latest_results.items():
+                for r in results:
+                    if r.get('ssn') == ssn:
+                        return feed_id
+        return None
+
+    def get_subjects_in_feed(self, feed_id):
+        """Return list of subject dicts for all recognised persons in a feed.
+
+        Each dict contains: ssn, name, designation, notes, heuristics.
+        Called from the web API; safe to call from any thread.
+        """
+        from modules.profiler.heuristics import generate as gen_heuristics
+
+        with self._designator._lock:
+            results = list(self._designator._latest_results.get(feed_id, []))
+
+        subjects = []
+        seen = set()
+        for r in results:
+            ssn = r.get('ssn')
+            if not ssn or ssn in seen:
+                continue
+            seen.add(ssn)
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                continue
+            _, _, name, designation, notes, last_ts, _ = person
+            subjects.append({
+                'ssn':         ssn,
+                'name':        name or 'UNKNOWN',
+                'designation': designation,
+                'notes':       notes,
+                'heuristics':  gen_heuristics(ssn, designation),
+            })
+        return subjects
+
+    # -------------------------------------------------------------------------
     # Hot reload
     # -------------------------------------------------------------------------
 

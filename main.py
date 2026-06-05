@@ -1,5 +1,7 @@
 import sys
 import os
+import subprocess
+import atexit
 
 # Install stdout/stderr intercept FIRST — captures all print() output from here on.
 from modules.core.logger import get_logger as _get_logger
@@ -58,6 +60,29 @@ def main():
                 manager.add_feed(src)
             else:
                 manager.add_feed(0)
+
+    # ── Web API ───────────────────────────────────────────────────────────────
+    # Internal REST API runs as a daemon thread inside this process (port 5001).
+    # Mobile web server runs as a separate subprocess (port 8000).
+    try:
+        from modules.api.internal_api import start_internal_api
+        start_internal_api(manager, db, port=5001)
+    except Exception as e:
+        print(f'[main] Failed to start internal API: {e}')
+
+    try:
+        _web_server_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'web', 'server.py'
+        )
+        _web_proc = subprocess.Popen(
+            [sys.executable, _web_server_path],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        atexit.register(_web_proc.terminate)
+        print(f'[main] Web server spawned (PID {_web_proc.pid}) on http://0.0.0.0:8000')
+    except Exception as e:
+        print(f'[main] Failed to spawn web server: {e}')
+    # ─────────────────────────────────────────────────────────────────────────
 
     sess = session.load() if restore else {}
     session.clear()
