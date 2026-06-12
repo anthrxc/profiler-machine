@@ -9,3 +9,4 @@ __pycache__
 *.pyc
 config
 logs
+web/certs
