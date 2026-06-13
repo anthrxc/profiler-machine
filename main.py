@@ -15,17 +15,9 @@ from insightface.app import FaceAnalysis
 from PyQt5.QtWidgets import QApplication
 from modules.core.startup import run
 from modules.core.feed_manager import FeedManager
-from modules.core.feeds_config import FeedsConfig
 from modules.core import session
 from modules.ui.main_window import MainWindow
 from modules.ui.device_picker import pick_devices
-
-
-def _coerce_source(src):
-    """Convert string digit sources back to int (device index)."""
-    if isinstance(src, str) and src.isdigit():
-        return int(src)
-    return src
 
 
 def main():
@@ -45,26 +37,27 @@ def main():
         sess_feeds = session.load().get('active_feeds', [])
         if sess_feeds:
             for entry in sess_feeds:
-                manager.add_feed(
-                    _coerce_source(entry.get('source', 0)),
-                    flip_h=entry.get('flip_h', False),
-                    flip_v=entry.get('flip_v', False),
-                )
+                src_val = entry.get('source', 0)
+                if isinstance(src_val, str) and src_val.isdigit():
+                    src_val = int(src_val)
+                manager.add_feed(src_val,
+                                 flip_h=entry.get('flip_h', False),
+                                 flip_v=entry.get('flip_v', False))
         else:
             manager.add_feed(0)
     else:
         saved = manager._config.get_all()
         if saved:
-            # Auto-load every feed previously added — skip the picker.
-            for feed_id in sorted(saved.keys()):
-                entry = saved[feed_id]
-                manager.add_feed(
-                    _coerce_source(entry.get('source', 0)),
-                    flip_h=entry.get('flip_h', False),
-                    flip_v=entry.get('flip_v', False),
-                )
+            # config/feeds.json already has feeds — restore them, skip picker.
+            for fid in sorted(saved.keys()):
+                entry = saved[fid]
+                src = entry.get('source', 0)
+                if isinstance(src, str) and src.isdigit():
+                    src = int(src)
+                manager.add_feed(src,
+                                 flip_h=entry.get('flip_h', False),
+                                 flip_v=entry.get('flip_v', False))
         else:
-            # First run — no saved feeds; show the picker.
             selected = pick_devices(devices)
             if selected:
                 for dev in selected:
