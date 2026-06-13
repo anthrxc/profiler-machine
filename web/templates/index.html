@@ -1,0 +1,1823 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>PROFM // MOBILE</title>
+  <link rel="icon" type="image/jpeg" href="/static/favicon.jpg">
+  <style>
+    /* ── Base ─────────────────────────────────────────────────────────── */
+    :root {
+      --green: #ffffff;
+      --green-d: #777777;
+      --green-g: #1a1a1a;
+      --amber: #ffa500;
+      --red: #ff3333;
+      --blue: #3399ff;
+      --orange: #ff6600;
+      --bg: #000000;
+      --bg2: #080808;
+      --bg3: #111111;
+      --bg4: #1a1a1a;
+      --border: #222222;
+      --dim: #444444;
+      --text: #cccccc;
+      --mono: 'Courier New', 'Lucida Console', monospace;
+      --tab-h: 52px;
+      --hdr-h: 48px;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Scanline overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(to bottom,
+          transparent 0px,
+          transparent 3px,
+          rgba(0, 0, 0, 0.07) 3px,
+          rgba(0, 0, 0, 0.07) 4px);
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Shared components ───────────────────────────────────────────── */
+    .screen {
+      display: none;
+      position: fixed;
+      inset: 0;
+    }
+
+    .screen.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 10px 0;
+    }
+
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 13px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      text-align: center;
+      transition: background .15s, border-color .15s;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    .btn:active {
+      background: var(--green-g);
+      border-color: var(--green-d);
+    }
+
+    .btn.danger {
+      color: var(--red);
+    }
+
+    .btn.amber {
+      color: var(--amber);
+    }
+
+    .btn:disabled {
+      color: var(--dim);
+      cursor: default;
+    }
+
+    input[type=text],
+    input[type=password] {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      padding: 10px 12px;
+      width: 100%;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      border-radius: 0;
+    }
+
+    input[type=text]:focus,
+    input[type=password]:focus {
+      border-color: var(--green);
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 7px;
+      font-size: 10px;
+      letter-spacing: 1px;
+      border: 1px solid;
+    }
+
+    .tag.root {
+      color: var(--red);
+      border-color: var(--red);
+    }
+
+    .tag.admin {
+      color: var(--amber);
+      border-color: var(--amber);
+    }
+
+    .tag.threat {
+      color: var(--red);
+      border-color: var(--red);
+    }
+
+    .tag.perpetrator {
+      color: var(--orange);
+      border-color: var(--orange);
+    }
+
+    .tag.victim {
+      color: var(--blue);
+      border-color: var(--blue);
+    }
+
+    .tag.irrelevant {
+      color: var(--dim);
+      border-color: var(--dim);
+    }
+
+    .status-msg {
+      font-size: 11px;
+      letter-spacing: 1px;
+      min-height: 18px;
+      text-align: center;
+      padding: 4px 0;
+    }
+
+    .status-msg.ok {
+      color: var(--green);
+    }
+
+    .status-msg.err {
+      color: var(--red);
+    }
+
+    .status-msg.dim {
+      color: var(--dim);
+    }
+
+    /* ── Spinner ─────────────────────────────────────────────────────── */
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    /* ── Glitch animation for title ──────────────────────────────────── */
+    @keyframes glitch {
+
+      0%,
+      94%,
+      100% {
+        text-shadow: none;
+        transform: none;
+      }
+
+      95% {
+        text-shadow: 2px 0 var(--red), -2px 0 var(--blue);
+        transform: skewX(-2deg);
+      }
+
+      97% {
+        text-shadow: -2px 0 var(--red), 2px 0 var(--blue);
+        transform: skewX(1deg);
+      }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       LOGIN SCREEN
+    ═══════════════════════════════════════════════════════════════════ */
+    #login-screen {
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+      background: var(--bg);
+    }
+
+    .login-box {
+      width: 100%;
+      max-width: 380px;
+      border: 1px solid var(--border);
+      padding: 28px 24px;
+    }
+
+    .login-logo {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .login-logo .logo-img {
+      width: 100%;
+      max-width: 340px;
+      display: block;
+      margin: 0 auto;
+      animation: glitch 6s infinite;
+    }
+
+    .login-logo .logo-sub {
+      color: var(--dim);
+      font-size: 10px;
+      letter-spacing: 3px;
+      margin-top: 8px;
+    }
+
+    .login-field-label {
+      color: var(--dim);
+      font-size: 10px;
+      letter-spacing: 2px;
+      margin-bottom: 6px;
+      margin-top: 16px;
+    }
+
+    #ssn-input {
+      font-size: 18px;
+      letter-spacing: 4px;
+      text-align: center;
+    }
+
+    #login-btn {
+      margin-top: 20px;
+      letter-spacing: 4px;
+    }
+
+    #login-status {
+      margin-top: 14px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       CAMERA SCREEN  (face verification fallback)
+    ═══════════════════════════════════════════════════════════════════ */
+    #camera-screen {
+      justify-content: flex-start;
+      align-items: stretch;
+      background: var(--bg);
+    }
+
+    #camera-screen .cam-header {
+      padding: 14px 16px;
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+    }
+
+    #camera-screen .cam-header h2 {
+      color: var(--amber);
+      font-size: 12px;
+      letter-spacing: 3px;
+    }
+
+    #camera-screen .cam-header p {
+      color: var(--dim);
+      font-size: 10px;
+      margin-top: 4px;
+    }
+
+    #cam-video {
+      width: 100%;
+      flex: 1;
+      object-fit: cover;
+      background: #000;
+    }
+
+    #cam-canvas {
+      display: none;
+    }
+
+    .cam-controls {
+      padding: 14px 16px;
+      background: var(--bg3);
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+    }
+
+    .cam-controls .btn {
+      flex: 1;
+    }
+
+    #cam-status {
+      padding: 8px 16px;
+      text-align: center;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       DASHBOARD
+    ═══════════════════════════════════════════════════════════════════ */
+    #dashboard {
+      background: var(--bg);
+    }
+
+    /* Header */
+    #dash-header {
+      height: var(--hdr-h);
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      flex-shrink: 0;
+      gap: 10px;
+    }
+
+    #dash-header .header-logo {
+      color: var(--green);
+      font-size: 11px;
+      letter-spacing: 2px;
+      flex-shrink: 0;
+    }
+
+    #dash-header .header-user {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #dash-header .header-user .user-name {
+      font-size: 12px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #dash-header .header-user .user-desg {
+      font-size: 10px;
+      color: var(--dim);
+    }
+
+    #dash-header .logout-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 1px;
+      padding: 5px 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    #dash-header .logout-btn:active {
+      border-color: var(--red);
+      color: var(--red);
+    }
+
+    /* Tab bar */
+    #tab-bar {
+      height: var(--tab-h);
+      display: flex;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      flex: 1;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      transition: color .15s;
+    }
+
+    .tab-btn .tab-icon {
+      font-size: 16px;
+    }
+
+    .tab-btn .tab-icon-img {
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+      filter: brightness(0) invert(0.27);
+      transition: filter .15s;
+    }
+
+    .tab-btn.active .tab-icon-img {
+      filter: brightness(0) invert(1);
+    }
+
+    .tab-btn.active {
+      color: var(--green);
+      border-bottom-color: var(--green);
+    }
+
+    /* Tab content area */
+    #tab-content {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .tab-panel {
+      display: none;
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 12px;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    /* ── FEEDS TAB ──────────────────────────────────────────────────── */
+    #tab-feeds .feed-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    /* On wide screens, a lone feed shouldn't span the full width. */
+    @media (min-width: 700px) {
+      #tab-feeds .feed-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      #tab-feeds .feed-grid.single-feed {
+        grid-template-columns: minmax(0, 640px);
+        justify-content: center;
+      }
+    }
+
+    .feed-card {
+      border: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .feed-card .feed-label {
+      padding: 6px 10px;
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: var(--dim);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .feed-card .feed-label .feed-status {
+      color: var(--green);
+    }
+
+    .feed-card img.feed-stream {
+      width: 100%;
+      display: block;
+      background: #050505;
+      min-height: 120px;
+    }
+
+    .no-feeds {
+      color: var(--dim);
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    /* ── SUBJECTS TAB ───────────────────────────────────────────────── */
+    .subjects-header {
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: var(--dim);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .subjects-header .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+
+    .subjects-header .refresh-btn:active {
+      color: var(--green);
+      border-color: var(--green-d);
+    }
+
+    .subject-card {
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      margin-bottom: 10px;
+      display: flex;
+      gap: 0;
+    }
+
+    .subject-card.root {
+      border-color: #330000;
+    }
+
+    .subject-card.admin {
+      border-color: #332200;
+    }
+
+    .subject-card.threat {
+      border-color: #330000;
+    }
+
+    .subject-card.perpetrator {
+      border-color: #331a00;
+    }
+
+    .subject-card.victim {
+      border-color: #001833;
+    }
+
+    .subject-photo {
+      width: 72px;
+      min-height: 72px;
+      flex-shrink: 0;
+      background: var(--bg3);
+      object-fit: cover;
+      display: block;
+    }
+
+    .subject-photo-placeholder {
+      width: 72px;
+      height: 100%;
+      min-height: 72px;
+      flex-shrink: 0;
+      background: var(--bg3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--dim);
+      font-size: 22px;
+    }
+
+    .subject-info {
+      flex: 1;
+      padding: 8px 10px;
+      overflow: hidden;
+    }
+
+    .subject-info .s-name {
+      font-size: 13px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .subject-info .s-ssn {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 1px;
+      margin-top: 2px;
+    }
+
+    .subject-info .s-tag-row {
+      margin-top: 5px;
+    }
+
+    .subject-info .s-heuristics {
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--dim);
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .subject-info .s-heuristics span {
+      white-space: nowrap;
+    }
+
+    .subject-info .s-notes {
+      margin-top: 5px;
+      font-size: 10px;
+      color: var(--dim);
+      font-style: italic;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+    }
+
+    .no-subjects {
+      color: var(--dim);
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    /* ── CONSOLE TAB ────────────────────────────────────────────────── */
+    #tab-console {
+      display: none;
+      flex-direction: column;
+      padding: 0;
+    }
+
+    #tab-console.active {
+      display: flex;
+    }
+
+    #console-output {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.7;
+      background: var(--bg);
+    }
+
+    .console-entry {
+      margin-bottom: 8px;
+    }
+
+    .console-entry .cmd-line {
+      color: var(--green);
+    }
+
+    .console-entry .cmd-line::before {
+      content: '> ';
+      color: var(--green-d);
+    }
+
+    .console-entry .cmd-output {
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .console-entry .cmd-output.err {
+      color: var(--red);
+    }
+
+    #console-input-row {
+      display: flex;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg3);
+      flex-shrink: 0;
+    }
+
+    #console-input-row .prompt {
+      color: var(--green);
+      padding: 0 10px;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    #console-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 12px 0;
+      outline: none;
+    }
+
+    #console-send {
+      background: none;
+      border: none;
+      border-left: 1px solid var(--border);
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 18px;
+      padding: 0 14px;
+      cursor: pointer;
+      height: 100%;
+    }
+
+    /* ── SCAN TAB ───────────────────────────────────────────────────── */
+    #tab-scan {
+      padding: 12px;
+    }
+
+    .scan-label {
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: var(--dim);
+      margin-bottom: 10px;
+    }
+
+    #scan-video-wrap {
+      position: relative;
+      width: 100%;
+      border: 1px solid var(--border);
+      background: #050505;
+      overflow: hidden;
+    }
+
+    #scan-video {
+      width: 100%;
+      display: block;
+      max-height: 320px;
+      object-fit: cover;
+    }
+
+    #scan-canvas {
+      display: none;
+    }
+
+    .scan-overlay-corners {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .scan-overlay-corners::before,
+    .scan-overlay-corners::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border-color: var(--green);
+      border-style: solid;
+    }
+
+    .scan-overlay-corners::before {
+      top: 8px;
+      left: 8px;
+      border-width: 2px 0 0 2px;
+    }
+
+    .scan-overlay-corners::after {
+      bottom: 8px;
+      right: 8px;
+      border-width: 0 2px 2px 0;
+    }
+
+    .scan-overlay-corners .corner-tr {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 20px;
+      height: 20px;
+      border-top: 2px solid var(--green);
+      border-right: 2px solid var(--green);
+    }
+
+    .scan-overlay-corners .corner-bl {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      width: 20px;
+      height: 20px;
+      border-bottom: 2px solid var(--green);
+      border-left: 2px solid var(--green);
+    }
+
+    .scan-target-line {
+      position: absolute;
+      left: 10%;
+      right: 10%;
+      top: 50%;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .scan-btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .scan-btn-row .btn {
+      flex: 1;
+    }
+
+    #scan-file-input {
+      display: none;
+    }
+
+    .scan-result-card {
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 12px;
+    }
+
+    .scan-result-card.matched {
+      border-color: var(--green-d);
+    }
+
+    .scan-result-card.enrolled {
+      border-color: var(--amber);
+    }
+
+    .scan-result-card.no-match {
+      border-color: var(--red);
+    }
+
+    .scan-result-card .sr-title {
+      font-size: 10px;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+
+    .scan-result-card.matched .sr-title {
+      color: var(--green);
+    }
+
+    .scan-result-card.enrolled .sr-title {
+      color: var(--amber);
+    }
+
+    .scan-result-card.no-match .sr-title {
+      color: var(--red);
+    }
+
+    .scan-result-content {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .scan-result-content img {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .scan-result-content .sr-details .sr-name {
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .scan-result-content .sr-details .sr-ssn {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 1px;
+      margin-top: 3px;
+    }
+
+    .scan-result-content .sr-details .sr-conf {
+      font-size: 10px;
+      color: var(--dim);
+      margin-top: 3px;
+    }
+
+    /* ── Enroll prompt form (scan tab) ──────────────────────────────── */
+    .enroll-form {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .enroll-form .enroll-label {
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--dim);
+      margin-top: 6px;
+    }
+
+    .enroll-form select,
+    .enroll-form textarea {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 9px 10px;
+      width: 100%;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      border-radius: 0;
+    }
+
+    .enroll-form select:focus,
+    .enroll-form textarea:focus {
+      border-color: var(--green);
+    }
+
+    .enroll-form textarea {
+      resize: vertical;
+      min-height: 44px;
+    }
+
+    .enroll-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .enroll-actions .btn {
+      flex: 1;
+    }
+
+    #scan-status {
+      margin-top: 10px;
+      text-align: center;
+    }
+
+    /* ── Pulse animation on scanning ────────────────────────────────── */
+    @keyframes pulse-border {
+
+      0%,
+      100% {
+        border-color: var(--border);
+      }
+
+      50% {
+        border-color: var(--green-d);
+      }
+    }
+
+    .scanning #scan-video-wrap {
+      animation: pulse-border 1s infinite;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+     LOGIN SCREEN
+════════════════════════════════════════════════════════════════════════ -->
+  <div id="login-screen" class="screen active">
+    <div class="login-box">
+      <div class="login-logo">
+        <img class="logo-img" src="/static/logo.jpg" alt="PROFM">
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="login-field-label">IDENTIFICATION NUMBER</div>
+      <input id="ssn-input" type="text" inputmode="numeric" maxlength="11" placeholder="000-00-0000" autocomplete="off"
+        spellcheck="false">
+
+      <button class="btn" id="login-btn" onclick="doLogin()">AUTHENTICATE</button>
+
+      <div id="login-status" class="status-msg dim">AWAITING INPUT</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+     CAMERA VERIFICATION SCREEN
+════════════════════════════════════════════════════════════════════════ -->
+  <div id="camera-screen" class="screen">
+    <div class="cam-header">
+      <h2>IDENTITY VERIFICATION REQUIRED</h2>
+      <p>Not detected in any active feed — verify identity via camera or photo</p>
+    </div>
+
+    <div id="cam-video-wrap" style="flex:1;overflow:hidden;position:relative;background:#000;">
+      <video id="cam-verify-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+    </div>
+    <canvas id="cam-verify-canvas" style="display:none;"></canvas>
+
+    <div id="cam-status" class="status-msg dim">INITIALISING CAMERA...</div>
+
+    <div class="cam-controls">
+      <button class="btn" id="cam-capture-btn" onclick="captureVerify()" disabled>CAPTURE</button>
+      <button class="btn amber" id="cam-upload-btn" onclick="triggerVerifyUpload()">UPLOAD PHOTO</button>
+      <button class="btn danger" onclick="cancelCameraVerify()">CANCEL</button>
+    </div>
+
+    <input type="file" id="cam-file-input" accept="image/*" capture="environment" style="display:none;"
+      onchange="handleVerifyUpload(event)">
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+     DASHBOARD
+════════════════════════════════════════════════════════════════════════ -->
+  <div id="dashboard" class="screen">
+
+    <!-- Header -->
+    <div id="dash-header">
+      <div class="header-logo">PROFM</div>
+      <div class="header-user">
+        <div class="user-name" id="hdr-name">—</div>
+        <div class="user-desg" id="hdr-desg"></div>
+      </div>
+      <button class="logout-btn" onclick="doLogout()">LOGOUT</button>
+    </div>
+
+    <!-- Tab bar -->
+    <div id="tab-bar">
+      <button class="tab-btn active" id="tbtn-feeds" onclick="switchTab('feeds')">
+        <img class="tab-icon-img" src="/static/feeds.png" alt="">FEEDS
+      </button>
+      <button class="tab-btn" id="tbtn-subjects" onclick="switchTab('subjects')">
+        <img class="tab-icon-img" src="/static/subjects.png" alt="">SUBJECTS
+      </button>
+      <button class="tab-btn" id="tbtn-console" onclick="switchTab('console')">
+        <img class="tab-icon-img" src="/static/console.png" alt="">CONSOLE
+      </button>
+      <button class="tab-btn" id="tbtn-scan" onclick="switchTab('scan')">
+        <img class="tab-icon-img" src="/static/scan.png" alt="">SCAN
+      </button>
+    </div>
+
+    <!-- Tab panels -->
+    <div id="tab-content">
+
+      <!-- FEEDS -->
+      <div class="tab-panel active" id="tab-feeds">
+        <div class="feed-grid" id="feed-grid">
+          <div class="no-feeds">NO ACTIVE FEEDS</div>
+        </div>
+      </div>
+
+      <!-- SUBJECTS -->
+      <div class="tab-panel" id="tab-subjects">
+        <div class="subjects-header">
+          <span id="subjects-label">FEED SUBJECTS</span>
+          <button class="refresh-btn" onclick="loadSubjects()">↻ REFRESH</button>
+        </div>
+        <div id="subjects-list"></div>
+      </div>
+
+      <!-- CONSOLE -->
+      <div class="tab-panel" id="tab-console">
+        <div id="console-output"></div>
+        <div id="console-input-row">
+          <span class="prompt">></span>
+          <input id="console-input" type="text" autocomplete="off" spellcheck="false" placeholder="type command..."
+            onkeydown="handleConsoleKey(event)">
+          <button id="console-send" onclick="sendCommand()">⏎</button>
+        </div>
+      </div>
+
+      <!-- SCAN -->
+      <div class="tab-panel" id="tab-scan">
+        <div class="scan-label">SUBJECT IDENTIFICATION SCAN</div>
+
+        <div id="scan-video-wrap">
+          <video id="scan-video" autoplay playsinline muted></video>
+          <canvas id="scan-canvas"></canvas>
+          <div class="scan-overlay-corners">
+            <div class="corner-tr"></div>
+            <div class="corner-bl"></div>
+          </div>
+          <div class="scan-target-line"></div>
+        </div>
+
+        <input type="file" id="scan-file-input" accept="image/*" capture="environment"
+          onchange="handleFileCapture(event)">
+
+        <div class="scan-btn-row">
+          <button class="btn" id="scan-capture-btn" onclick="doScanCapture()">
+            CAPTURE &amp; IDENTIFY
+          </button>
+          <button class="btn amber" onclick="triggerFileCapture()">
+            UPLOAD
+          </button>
+        </div>
+
+        <div id="scan-status" class="status-msg dim"></div>
+        <div id="scan-result"></div>
+      </div>
+
+    </div><!-- tab-content -->
+  </div><!-- dashboard -->
+
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════════════
+    // State
+    // ═══════════════════════════════════════════════════════════════════════════
+    const state = {
+      ssn: null, name: null, designation: null, feed_id: null
+    };
+
+    let cmdHistory = [];
+    let historyIdx = -1;
+    let scanStream = null;
+    let lastScanBlob = null;
+    let verifyStream = null;
+    let subjectPoll = null;
+    let feedPoll = null;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Screen management
+    // ═══════════════════════════════════════════════════════════════════════════
+    function showScreen(id) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SSN input auto-formatter
+    // ═══════════════════════════════════════════════════════════════════════════
+    const ssnInput = document.getElementById('ssn-input');
+    ssnInput.addEventListener('input', () => {
+      let digits = ssnInput.value.replace(/\D/g, '').slice(0, 9);
+      let out = digits;
+      if (digits.length > 3) out = digits.slice(0, 3) + '-' + digits.slice(3);
+      if (digits.length > 5) out = out.slice(0, 6) + '-' + out.slice(6);
+      ssnInput.value = out;
+    });
+    ssnInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') doLogin();
+    });
+
+    function isValidSSN(v) { return /^\d{3}-\d{2}-\d{4}$/.test(v); }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Login
+    // ═══════════════════════════════════════════════════════════════════════════
+    async function doLogin() {
+      const ssn = ssnInput.value.trim();
+      if (!isValidSSN(ssn)) {
+        setLoginStatus('INVALID FORMAT  (XXX-XX-XXXX)', 'err');
+        return;
+      }
+
+      setLoginStatus('<span class="spinner"></span> AUTHENTICATING...', 'dim');
+      document.getElementById('login-btn').disabled = true;
+
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssn })
+        });
+        const data = await resp.json();
+
+        if (data.ok) {
+          loginSuccess(data);
+          return;
+        }
+
+        if (data.reason === 'not_in_feed') {
+          setLoginStatus('NOT DETECTED IN FEEDS — CAMERA VERIFICATION REQUIRED', 'err');
+          setTimeout(() => startCameraVerify(ssn), 800);
+          return;
+        }
+
+        const msgs = {
+          missing_ssn: 'IDENTIFICATION NUMBER REQUIRED',
+          not_found: 'SUBJECT NOT FOUND IN DATABASE',
+          unauthorized: 'ACCESS DENIED — INSUFFICIENT CLEARANCE',
+        };
+        setLoginStatus(msgs[data.reason] || 'AUTHENTICATION FAILED', 'err');
+
+      } catch (e) {
+        setLoginStatus('CONNECTION ERROR — IS PROFM RUNNING?', 'err');
+      } finally {
+        document.getElementById('login-btn').disabled = false;
+      }
+    }
+
+    function loginSuccess(data) {
+      state.ssn = data.ssn;
+      state.name = data.name;
+      state.designation = data.designation;
+      state.feed_id = data.feed_id;
+
+      document.getElementById('hdr-name').textContent = data.name;
+      document.getElementById('hdr-desg').textContent =
+        data.designation.toUpperCase() + (data.feed_id !== null ? ` // FEED ${data.feed_id}` : '');
+
+      stopCameraVerify();
+      showScreen('dashboard');
+      switchTab('feeds');
+      startFeedPolling();
+      startSubjectPolling();
+
+      // Welcome line in console
+      appendConsoleEntry(null, `// Session opened as ${data.name} [${data.designation.toUpperCase()}]`, true);
+    }
+
+    function setLoginStatus(html, cls) {
+      const el = document.getElementById('login-status');
+      el.innerHTML = html;
+      el.className = 'status-msg ' + cls;
+    }
+
+    function doLogout() {
+      state.ssn = state.name = state.designation = state.feed_id = null;
+      stopSubjectPolling();
+      stopScanStream();
+      stopCameraVerify();
+      clearFeeds();
+      ssnInput.value = '';
+      document.getElementById('console-output').innerHTML = '';
+      setLoginStatus('AWAITING INPUT', 'dim');
+      showScreen('login-screen');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Camera verification  (identity fallback when not in feeds)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let _verifySsn = null;
+
+    async function startCameraVerify(ssn) {
+      _verifySsn = ssn;
+      showScreen('camera-screen');
+      setCamStatus('INITIALISING CAMERA...', 'dim');
+
+      const video = document.getElementById('cam-verify-video');
+      const capBtn = document.getElementById('cam-capture-btn');
+      capBtn.disabled = true;
+
+      if (!navigator.mediaDevices) {
+        setCamStatus('CAMERA REQUIRES HTTPS — UPLOAD A PHOTO INSTEAD', 'err');
+        return;
+      }
+
+      try {
+        verifyStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+        video.srcObject = verifyStream;
+        await video.play();
+        capBtn.disabled = false;
+        setCamStatus('ALIGN FACE AND CAPTURE — OR UPLOAD A PHOTO', 'ok');
+      } catch (e) {
+        setCamStatus('CAMERA UNAVAILABLE — UPLOAD A PHOTO INSTEAD', 'err');
+      }
+    }
+
+    function stopCameraVerify() {
+      if (verifyStream) {
+        verifyStream.getTracks().forEach(t => t.stop());
+        verifyStream = null;
+      }
+      document.getElementById('cam-verify-video').srcObject = null;
+    }
+
+    function cancelCameraVerify() {
+      stopCameraVerify();
+      setLoginStatus('VERIFICATION CANCELLED', 'dim');
+      showScreen('login-screen');
+      document.getElementById('login-btn').disabled = false;
+    }
+
+    function triggerVerifyUpload() {
+      document.getElementById('cam-file-input').click();
+    }
+
+    function handleVerifyUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      submitVerifyImage(file);
+      e.target.value = '';
+    }
+
+    async function captureVerify() {
+      const video = document.getElementById('cam-verify-video');
+      const canvas = document.getElementById('cam-verify-canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+
+      canvas.toBlob(submitVerifyImage, 'image/jpeg', 0.88);
+    }
+
+    async function submitVerifyImage(blob) {
+      setCamStatus('<span class="spinner"></span> ANALYSING...', 'dim');
+      document.getElementById('cam-capture-btn').disabled = true;
+      document.getElementById('cam-upload-btn').disabled = true;
+
+      try {
+        const fd = new FormData();
+        fd.append('ssn', _verifySsn);
+        fd.append('image', blob, 'verify.jpg');
+
+        const resp = await fetch('/api/auth/verify_face', { method: 'POST', body: fd });
+        const data = await resp.json();
+
+        if (data.ok) {
+          loginSuccess(data);
+        } else {
+          const msgs = {
+            face_mismatch: 'IDENTITY NOT CONFIRMED — FACE DOES NOT MATCH',
+            no_face: 'NO FACE DETECTED — REPOSITION AND RETRY',
+            bad_image: 'IMAGE PROCESSING ERROR — RETRY',
+            unauthorized: 'ACCESS DENIED',
+          };
+          setCamStatus(msgs[data.reason] || 'VERIFICATION FAILED', 'err');
+          document.getElementById('cam-capture-btn').disabled = false;
+          document.getElementById('cam-upload-btn').disabled = false;
+        }
+      } catch (e) {
+        setCamStatus('CONNECTION ERROR', 'err');
+        document.getElementById('cam-capture-btn').disabled = false;
+        document.getElementById('cam-upload-btn').disabled = false;
+      }
+    }
+
+    function setCamStatus(html, cls) {
+      const el = document.getElementById('cam-status');
+      el.innerHTML = html;
+      el.className = 'status-msg ' + cls;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tab switching
+    // ═══════════════════════════════════════════════════════════════════════════
+    let _activeTab = 'feeds';
+
+    function switchTab(name) {
+      _activeTab = name;
+
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+
+      document.getElementById('tbtn-' + name).classList.add('active');
+      document.getElementById('tab-' + name).classList.add('active');
+
+      if (name === 'subjects') loadSubjects();
+      if (name === 'scan') initScanCamera();
+      if (name !== 'scan') stopScanStream();
+      if (name === 'console') document.getElementById('console-input').focus();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Feeds
+    // ═══════════════════════════════════════════════════════════════════════════
+    async function loadFeeds(silent = false) {
+      try {
+        const resp = await fetch('/api/feeds');
+        const feeds = await resp.json();
+        reconcileFeeds(feeds);
+      } catch (e) {
+        // During polling, a transient error shouldn't wipe live streams.
+        if (!silent) {
+          document.getElementById('feed-grid').innerHTML =
+            '<div class="no-feeds">ERROR LOADING FEEDS</div>';
+        }
+      }
+    }
+
+    function feedCardHtml(f) {
+      return `
+    <div class="feed-card" data-feed-id="${f.id}">
+      <div class="feed-label">
+        <span>FEED ${f.id} // ${escHtml(String(f.source))}</span>
+        <span class="feed-status">${escHtml(String(f.status).toUpperCase())}</span>
+      </div>
+      <img class="feed-stream"
+           src="/api/feed/${f.id}/stream"
+           alt="Feed ${f.id}"
+           onerror="this.style.minHeight='80px'">
+    </div>`;
+    }
+
+    // Update the grid in place: add new feeds, drop removed ones, refresh
+    // status text — without recreating the <img> of feeds that persist, so
+    // their MJPEG streams are never interrupted by a poll.
+    function reconcileFeeds(feeds) {
+      const grid = document.getElementById('feed-grid');
+
+      if (!feeds.length) {
+        grid.innerHTML = '<div class="no-feeds">NO ACTIVE FEEDS</div>';
+        grid.classList.remove('single-feed');
+        return;
+      }
+
+      // Clear the placeholder/empty state before the first real card lands.
+      if (!grid.querySelector('.feed-card')) grid.innerHTML = '';
+
+      const incoming = new Set(feeds.map(f => String(f.id)));
+
+      // Remove cards for feeds that no longer exist.
+      grid.querySelectorAll('.feed-card').forEach(card => {
+        if (!incoming.has(card.dataset.feedId)) card.remove();
+      });
+
+      // Add new cards; update status on existing ones (leave the stream alone).
+      feeds.forEach(f => {
+        const id = String(f.id);
+        const card = grid.querySelector(`.feed-card[data-feed-id="${id}"]`);
+        if (!card) {
+          grid.insertAdjacentHTML('beforeend', feedCardHtml(f));
+        } else {
+          const st = card.querySelector('.feed-status');
+          const newStatus = String(f.status).toUpperCase();
+          if (st && st.textContent !== newStatus) st.textContent = newStatus;
+        }
+      });
+
+      grid.classList.toggle('single-feed', feeds.length === 1);
+    }
+
+    function startFeedPolling() {
+      loadFeeds();
+      feedPoll = setInterval(() => loadFeeds(true), 5000);
+    }
+
+    function stopFeedPolling() {
+      if (feedPoll) { clearInterval(feedPoll); feedPoll = null; }
+    }
+
+    function clearFeeds() {
+      stopFeedPolling();
+      document.getElementById('feed-grid').innerHTML =
+        '<div class="no-feeds">NO ACTIVE FEEDS</div>';
+      document.getElementById('feed-grid').classList.remove('single-feed');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Subjects
+    // ═══════════════════════════════════════════════════════════════════════════
+    function startSubjectPolling() {
+      loadSubjects();
+      subjectPoll = setInterval(loadSubjects, 5000);
+    }
+
+    function stopSubjectPolling() {
+      if (subjectPoll) { clearInterval(subjectPoll); subjectPoll = null; }
+    }
+
+    async function loadSubjects() {
+      if (!state.ssn) return;
+
+      const endpoint = state.feed_id !== null
+        ? `/api/feed/${state.feed_id}/subjects`
+        : '/api/subjects';
+
+      const label = state.feed_id !== null
+        ? `FEED ${state.feed_id} SUBJECTS`
+        : 'ALL SUBJECTS';
+
+      document.getElementById('subjects-label').textContent = label;
+
+      try {
+        const resp = await fetch(endpoint);
+        const list = await resp.json();
+        renderSubjects(list);
+      } catch (e) {
+        document.getElementById('subjects-list').innerHTML =
+          '<div class="no-subjects">ERROR LOADING SUBJECTS</div>';
+      }
+    }
+
+    function renderSubjects(subjects) {
+      const el = document.getElementById('subjects-list');
+      if (!subjects.length) {
+        el.innerHTML = '<div class="no-subjects">NO SUBJECTS IDENTIFIED IN FEED</div>';
+        return;
+      }
+      el.innerHTML = subjects.map(s => subjectCard(s)).join('');
+    }
+
+    function subjectCard(s) {
+      const desg = s.designation || 'irrelevant';
+      const h = s.heuristics || {};
+      const bri = h.bri !== undefined ? `BRI:${h.bri}` : '';
+      const micro = h.micro !== undefined ? `μ:${h.micro}` : '';
+      const gait = h.gait ? `GAIT:${h.gait}` : '';
+      const tag = h.tag ? `[${h.tag}]` : '';
+
+      const hInfo = [bri, micro, gait, tag].filter(Boolean).join('  ');
+
+      return `
+    <div class="subject-card ${desg}">
+      <img class="subject-photo"
+           src="/api/subject/${s.ssn}/photo"
+           alt=""
+           onerror="this.outerHTML='<div class=\\'subject-photo-placeholder\\'>?</div>'">
+      <div class="subject-info">
+        <div class="s-name">${s.name}</div>
+        <div class="s-ssn">${s.ssn}</div>
+        <div class="s-tag-row"><span class="tag ${desg}">${desg.toUpperCase()}</span></div>
+        ${hInfo ? `<div class="s-heuristics"><span>${hInfo}</span></div>` : ''}
+        ${s.notes ? `<div class="s-notes">${escHtml(s.notes)}</div>` : ''}
+      </div>
+    </div>
+  `;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Console
+    // ═══════════════════════════════════════════════════════════════════════════
+    function appendConsoleEntry(cmd, output, ok) {
+      const el = document.getElementById('console-output');
+      const div = document.createElement('div');
+      div.className = 'console-entry';
+      div.innerHTML = (cmd ? `<div class="cmd-line">${escHtml(cmd)}</div>` : '') +
+        `<div class="cmd-output${ok ? '' : ' err'}">${escHtml(output)}</div>`;
+      el.appendChild(div);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    async function sendCommand() {
+      const input = document.getElementById('console-input');
+      const cmd = input.value.trim();
+      if (!cmd) return;
+
+      // History
+      cmdHistory.unshift(cmd);
+      if (cmdHistory.length > 50) cmdHistory.pop();
+      historyIdx = -1;
+      input.value = '';
+
+      try {
+        const resp = await fetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssn: state.ssn, command: cmd })
+        });
+        const data = await resp.json();
+        appendConsoleEntry(cmd, data.output || '(no output)', data.ok !== false);
+
+        // Refresh feeds/subjects after commands that change state
+        if (/^feed (add|remove)/.test(cmd.toLowerCase())) loadFeeds();
+        if (/^profiler (update|enroll)/.test(cmd.toLowerCase())) loadSubjects();
+
+      } catch (e) {
+        appendConsoleEntry(cmd, 'CONNECTION ERROR', false);
+      }
+    }
+
+    function handleConsoleKey(e) {
+      if (e.key === 'Enter') { sendCommand(); return; }
+
+      const input = document.getElementById('console-input');
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (historyIdx < cmdHistory.length - 1) {
+          historyIdx++;
+          input.value = cmdHistory[historyIdx];
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (historyIdx > 0) {
+          historyIdx--;
+          input.value = cmdHistory[historyIdx];
+        } else {
+          historyIdx = -1;
+          input.value = '';
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Scan
+    // ═══════════════════════════════════════════════════════════════════════════
+    async function initScanCamera() {
+      const video = document.getElementById('scan-video');
+      const capBtn = document.getElementById('scan-capture-btn');
+      if (scanStream) return;  // already running
+
+      capBtn.disabled = true;
+
+      // navigator.mediaDevices is undefined on plain HTTP (non-localhost)
+      if (!navigator.mediaDevices) {
+        setScanStatus('CAMERA REQUIRES HTTPS — USE UPLOAD', 'err');
+        return;
+      }
+
+      try {
+        scanStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        video.srcObject = scanStream;
+        await video.play();
+        capBtn.disabled = false;
+        setScanStatus('CAMERA READY — POINT AT SUBJECT', 'dim');
+      } catch (e) {
+        setScanStatus('CAMERA UNAVAILABLE — USE UPLOAD INSTEAD', 'err');
+      }
+    }
+
+    function stopScanStream() {
+      if (scanStream) {
+        scanStream.getTracks().forEach(t => t.stop());
+        scanStream = null;
+        const v = document.getElementById('scan-video');
+        if (v) v.srcObject = null;
+      }
+    }
+
+    function doScanCapture() {
+      const video = document.getElementById('scan-video');
+      if (!video.srcObject) { setScanStatus('NO CAMERA — USE UPLOAD', 'err'); return; }
+
+      const canvas = document.getElementById('scan-canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+
+      canvas.toBlob(blob => submitScanImage(blob), 'image/jpeg', 0.88);
+    }
+
+    function triggerFileCapture() {
+      document.getElementById('scan-file-input').click();
+    }
+
+    function handleFileCapture(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      submitScanImage(file);
+      e.target.value = '';
+    }
+
+    async function submitScanImage(blob) {
+      lastScanBlob = blob;
+      setScanStatus('<span class="spinner"></span> IDENTIFYING...', 'dim');
+      document.getElementById('scan-result').innerHTML = '';
+      document.getElementById('tab-scan').classList.add('scanning');
+      document.getElementById('scan-capture-btn').disabled = true;
+
+      const fd = new FormData();
+      fd.append('image', blob, 'scan.jpg');
+
+      try {
+        const resp = await fetch('/api/recognize', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderScanResult(data);
+      } catch (e) {
+        setScanStatus('CONNECTION ERROR', 'err');
+      } finally {
+        document.getElementById('tab-scan').classList.remove('scanning');
+        document.getElementById('scan-capture-btn').disabled = false;
+      }
+    }
+
+    function renderScanResult(data) {
+      if (!data.ok) {
+        const msgs = {
+          no_face: 'NO FACE DETECTED IN IMAGE',
+          multiple_faces: `MULTIPLE FACES DETECTED (${data.count || '?'}) — USE SINGLE-SUBJECT IMAGE`,
+          bad_image: 'IMAGE COULD NOT BE PROCESSED',
+          no_image: 'NO IMAGE RECEIVED',
+          bad_designation: 'INVALID ROLE SELECTED',
+        };
+        setScanStatus(msgs[data.reason] || 'SCAN FAILED', 'err');
+        return;
+      }
+
+      // Unknown subject — show enrollment prompt instead of auto-enrolling.
+      if (data.pending) {
+        renderEnrollPrompt(data.suggested || {});
+        setScanStatus('UNKNOWN SUBJECT — CONFIRM ENROLLMENT', 'amber');
+        return;
+      }
+
+      let cssClass, title;
+      if (data.matched) {
+        cssClass = 'matched';
+        title = `SUBJECT IDENTIFIED  [${data.confidence}% CONFIDENCE]`;
+        setScanStatus('MATCH FOUND', 'ok');
+      } else {
+        cssClass = 'enrolled';
+        title = 'SUBJECT ENROLLED';
+        setScanStatus(`ENROLLED AS ${data.designation.toUpperCase()}`, 'amber');
+      }
+
+      const desg = data.designation || 'irrelevant';
+      document.getElementById('scan-result').innerHTML = `
+    <div class="scan-result-card ${cssClass}">
+      <div class="sr-title">${title}</div>
+      <div class="scan-result-content">
+        <img src="/api/subject/${data.ssn}/photo?t=${Date.now()}"
+             alt="" onerror="this.style.display='none'">
+        <div class="sr-details">
+          <div class="sr-name">${escHtml(data.name)}</div>
+          <div class="sr-ssn">${data.ssn}</div>
+          <div class="sr-ssn" style="margin-top:5px;">
+            <span class="tag ${desg}">${desg.toUpperCase()}</span>
+          </div>
+          ${data.confidence ? `<div class="sr-conf">CONFIDENCE: ${data.confidence}%</div>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+
+      // Refresh subjects in case someone was just enrolled
+      if (!data.matched) loadSubjects();
+    }
+
+    function renderEnrollPrompt(s) {
+      const roles = s.designations && s.designations.length ? s.designations : ['irrelevant'];
+      const opts = roles.map(r =>
+        `<option value="${r}" ${r === s.designation ? 'selected' : ''}>${r.toUpperCase()}</option>`
+      ).join('');
+
+      document.getElementById('scan-result').innerHTML = `
+    <div class="scan-result-card no-match">
+      <div class="sr-title">UNKNOWN SUBJECT — ENROLL?</div>
+      <div class="enroll-form">
+        <label class="enroll-label">NAME (OPTIONAL)</label>
+        <input type="text" id="enroll-name" placeholder="UNKNOWN" autocomplete="off">
+        <label class="enroll-label">ROLE</label>
+        <select id="enroll-role">${opts}</select>
+        <label class="enroll-label">NOTES (OPTIONAL)</label>
+        <textarea id="enroll-notes" rows="2">${escHtml(s.notes || '')}</textarea>
+        <div class="enroll-actions">
+          <button class="btn" onclick="confirmEnroll()">CONFIRM ENROLL</button>
+          <button class="btn danger" onclick="cancelEnroll()">CANCEL</button>
+        </div>
+      </div>
+    </div>`;
+    }
+
+    async function confirmEnroll() {
+      if (!lastScanBlob) { setScanStatus('NO IMAGE TO ENROLL — RESCAN', 'err'); return; }
+
+      const name = document.getElementById('enroll-name').value.trim();
+      const role = document.getElementById('enroll-role').value;
+      const notes = document.getElementById('enroll-notes').value.trim();
+
+      setScanStatus('<span class="spinner"></span> ENROLLING...', 'dim');
+      document.querySelectorAll('.enroll-actions .btn').forEach(b => b.disabled = true);
+
+      const fd = new FormData();
+      fd.append('image', lastScanBlob, 'scan.jpg');
+      fd.append('name', name);
+      fd.append('notes', notes);
+      fd.append('designation', role);
+
+      try {
+        const resp = await fetch('/api/enroll', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderScanResult(data);
+      } catch (e) {
+        setScanStatus('CONNECTION ERROR', 'err');
+        document.querySelectorAll('.enroll-actions .btn').forEach(b => b.disabled = false);
+      }
+    }
+
+    function cancelEnroll() {
+      lastScanBlob = null;
+      document.getElementById('scan-result').innerHTML = '';
+      setScanStatus('ENROLLMENT CANCELLED', 'dim');
+    }
+
+    function setScanStatus(html, cls) {
+      const el = document.getElementById('scan-status');
+      el.innerHTML = html;
+      el.className = 'status-msg ' + (cls === 'amber' ? 'ok' : cls);
+      if (cls === 'amber') el.style.color = 'var(--amber)';
+      else el.style.color = '';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Utility
+    // ═══════════════════════════════════════════════════════════════════════════
+    function escHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+  </script>
+</body>
+
+</html>

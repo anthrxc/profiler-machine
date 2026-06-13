@@ -1,0 +1,7 @@
+{
+  "https_port": 8000,
+  "redirect_port": 8001,
+  "internal_api_port": 5001,
+  "host": "0.0.0.0",
+  "enable_http_redirect": true
+}
