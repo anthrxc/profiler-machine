@@ -52,7 +52,7 @@ opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
 packaging==26.0
 pandas==3.0.2
-pillow==12.2.0
+pillow==12.1.1
 playsound @ git+https://github.com/taconi/playsound@92385c78ec05c2fc3afad1afc5edc9d1282aa1e5
 prettytable==3.17.0
 protobuf==7.34.1
@@ -93,6 +93,6 @@ typing_extensions==4.15.0
 tzdata==2026.2
 ultralytics==8.3.50
 ultralytics-thop==2.0.19
-urllib3==2.7.0
+urllib3==2.6.3
 wcwidth==0.6.0
 Werkzeug==3.1.8
