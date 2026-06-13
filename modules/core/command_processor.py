@@ -1,16 +1,28 @@
 # modules/core/command_processor.py
 # Headless command execution — no Qt dependency.
 # Used by the internal web API to run commands and return output as text.
+#
+# This processor exposes the subset of desktop console commands that are
+# meaningful from the mobile web interface. Commands that drive desktop-only
+# Qt UI (panels, fullscreen, log viewer) or that would terminate the server
+# the client is talking to (restart) are intentionally not available here.
 
 import os
-from modules.profiler.recognition import DESIGNATIONS, IMAGES_DIR
+from modules.profiler.recognition import DESIGNATIONS
+
+# Desktop-only primary commands. Recognised so the user gets a clear message
+# instead of "Unknown command", but not executable from the web interface.
+DESKTOP_ONLY = {'quit', 'fullscreen', 'logs', 'feed', 'reload', 'restart'}
+
+# profiler subcommands that exist on desktop but are not exposed on mobile.
+PROFILER_DESKTOP_ONLY = {'login', 'toggle', 'start', 'stop', 'show', 'enroll'}
 
 
 class CommandProcessor:
     """Execute PROFM console commands and return output as a dict.
 
-    This mirrors the logic in modules/ui/console.py but has no Qt dependency
-    and accumulates output in memory rather than printing to the terminal.
+    Mirrors the relevant logic in modules/ui/main_window.py but has no Qt
+    dependency and accumulates output in memory rather than printing.
 
     Usage:
         cp = CommandProcessor(feed_manager, db)
@@ -42,30 +54,42 @@ class CommandProcessor:
         if primary in ('help', '?'):
             self._handle_help(args)
 
-        elif primary == 'feed':
+        elif primary in DESKTOP_ONLY:
+            self._out(f"'{primary}' is not available from the web interface.", ok=False)
+
+        elif primary == 'track':
+            if not self._is_admin_or_root():
+                self._out('Access denied. Admin or root required.', ok=False)
+            else:
+                self._handle_track(args)
+
+        elif primary == 'untrack':
+            if not self._is_admin_or_root():
+                self._out('Access denied. Admin or root required.', ok=False)
+            else:
+                self._handle_untrack()
+
+        elif primary == 'overlay':
+            if not self._is_admin_or_root():
+                self._out('Access denied. Admin or root required.', ok=False)
+            else:
+                self._handle_overlay(args)
+
+        elif primary == 'alert':
             if not self._is_admin_or_root():
                 self._out('Access denied. Admin or root required.', ok=False)
             elif not args:
-                self._out('Usage: feed [add|remove|focus|grid|list|flip]', ok=False)
+                self._out('Usage: alert [add|remove|list|mute|unmute]', ok=False)
             else:
-                self._handle_feed(args)
+                self._handle_alert(args)
 
         elif primary == 'profiler':
             if not self._is_admin_or_root():
                 self._out('Access denied. Admin or root required.', ok=False)
             elif not args:
-                self._out('Usage: profiler [list|info|enroll|update]', ok=False)
+                self._out('Usage: profiler [list|info|update|remove|neutralize]', ok=False)
             else:
                 self._handle_profiler(args)
-
-        elif primary == 'reload':
-            if not self._is_root():
-                self._out('Access denied. Root required.', ok=False)
-            else:
-                self._handle_reload()
-
-        elif primary in ('shutdown', 'fullscreen'):
-            self._out(f"'{primary}' is not available from the web interface.", ok=False)
 
         else:
             self._out(f"Unknown command: '{primary}'", ok=False)
@@ -102,8 +126,12 @@ class CommandProcessor:
         p = self.db.get_by_ssn(self._active_user_ssn)
         return p[3] if p else None
 
+    @property
+    def _designator(self):
+        return self.feed_manager._designator
+
     # -------------------------------------------------------------------------
-    # Help
+    # Help  (mobile-specific reference)
     # -------------------------------------------------------------------------
 
     def _handle_help(self, args):
@@ -113,20 +141,29 @@ class CommandProcessor:
 
         desg = self._get_designation()
         self._out('=' * 60)
-        self._out('PROFILER MACHINE — COMMAND REFERENCE')
+        self._out('PROFILER MACHINE — MOBILE COMMAND REFERENCE')
         self._out(f'Logged in as: {desg.upper()}' if desg else 'Not logged in')
         self._out('=' * 60)
         self._out('')
-        self._out('[ALWAYS AVAILABLE]')
-        self._out('  help [command]    Show this help')
+        self._out('  help [command]            Show this reference')
 
         if self._is_admin_or_root():
             self._out('')
-            self._out('[ADMIN/ROOT ONLY]')
-            self._out('  feed              Manage video feeds')
-            self._out('  profiler          Manage person database')
-            if self._is_root():
-                self._out('  reload            Hot-reload modules/assets (root only)')
+            self._out('[ADMIN/ROOT]')
+            self._out('  track <SSN>               Track subject across all feeds')
+            self._out('  untrack                   Clear active tracking target')
+            self._out('  overlay <role>            Force debug overlay role')
+            self._out('  alert add/remove/list/mute/unmute   Manage alert rules')
+            self._out('  profiler list             List all enrolled persons')
+            self._out('  profiler info <SSN>       Show details for a person')
+            self._out('  profiler update <SSN> <field> <value>   Edit a person')
+
+        if self._is_root():
+            self._out('')
+            self._out('[ROOT]')
+            self._out('  profiler remove <SSN>     Delete a person')
+            self._out('  profiler neutralize <SSN> [note]   Reset to IRRELEVANT')
+            self._out('  profiler update <SSN> designation <value>')
 
         self._out('')
         self._out("Type 'help <command>' for details.")
@@ -136,27 +173,38 @@ class CommandProcessor:
         topics = {
             'help': (
                 'HELP — Show command reference\n'
-                '  Syntax: help [command]'
+                '  help [command]'
             ),
-            'feed': (
-                'FEED — Manage video feeds (admin/root only)\n'
-                '  feed list\n'
-                '  feed add <source> [fliph] [flipv]\n'
-                '  feed remove <id>\n'
-                '  feed focus <id>\n'
-                '  feed grid\n'
-                '  feed flip <id> <h|v|both|reset>'
+            'track': (
+                'TRACK — Track a subject across all feeds\n'
+                '  track <SSN>'
+            ),
+            'untrack': (
+                'UNTRACK — Clear the active tracking target\n'
+                '  untrack'
+            ),
+            'overlay': (
+                'OVERLAY — Force a debug overlay role\n'
+                '  overlay <role>\n'
+                f'  Roles: {", ".join(DESIGNATIONS)}'
+            ),
+            'alert': (
+                'ALERT — Manage alert rules\n'
+                '  alert add designation <role>\n'
+                '  alert add co-presence <role_a> <role_b>\n'
+                '  alert add ssn <SSN>\n'
+                '  alert remove <rule_id>\n'
+                '  alert list\n'
+                '  alert mute [rule_id]\n'
+                '  alert unmute [rule_id]'
             ),
             'profiler': (
-                'PROFILER — Manage persons (admin/root only)\n'
+                'PROFILER — Manage persons\n'
                 '  profiler list\n'
-                '  profiler info <ssn>\n'
-                '  profiler enroll <filename>   (file in database/enroll/)\n'
-                '  profiler update <ssn> <name|designation|notes> <value>'
-            ),
-            'reload': (
-                'RELOAD — Hot-reload overlays, heuristics, antispoof (root only)\n'
-                '  Syntax: reload'
+                '  profiler info <SSN>\n'
+                '  profiler update <SSN> <name|designation|notes> <value>\n'
+                '  profiler remove <SSN>            (root)\n'
+                '  profiler neutralize <SSN> [note] (root)'
             ),
         }
         text = topics.get(cmd)
@@ -166,102 +214,140 @@ class CommandProcessor:
             self._out(f"No help available for '{cmd}'.", ok=False)
 
     # -------------------------------------------------------------------------
-    # Feed commands
+    # Track / untrack
     # -------------------------------------------------------------------------
 
-    def _handle_feed(self, args):
-        sub  = args[0].lower()
-        rest = args[1:]
+    def _handle_track(self, args):
+        if not args:
+            self._out('Usage: track <SSN>', ok=False)
+            return
+        ssn = args[0]
+        person = self.db.get_by_ssn(ssn)
+        if not person:
+            self._out(f'No person found: {ssn}', ok=False)
+            return
+        self._designator.set_tracked_ssn(ssn)
+        name = person[2] or ssn
+        self._out(f'Now tracking {name} [{ssn}] across all feeds.')
 
-        if sub == 'list':
-            feeds = self.feed_manager.list_feeds_with_config()
-            if not feeds:
-                self._out('No active feeds.')
-                return
-            self._out('--- ACTIVE FEEDS ---')
-            for fid, source, flip_h, flip_v, status in feeds:
-                flags = []
-                if flip_h: flags.append('fliph')
-                if flip_v: flags.append('flipv')
-                flag_str = f'  [{", ".join(flags)}]' if flags else ''
-                self._out(f'  Feed {fid}: {source}  [{status}]{flag_str}')
-            self._out(f'{len(feeds)} active feed(s).')
+    def _handle_untrack(self):
+        current = self._designator.get_tracked_ssn()
+        self._designator.clear_tracked_ssn()
+        if current:
+            self._out(f'Tracking cleared for {current}.')
+        else:
+            self._out('No active tracking target.')
 
-        elif sub == 'add':
+    # -------------------------------------------------------------------------
+    # Overlay
+    # -------------------------------------------------------------------------
+
+    def _handle_overlay(self, args):
+        if not args:
+            self._out(f'Roles: {", ".join(DESIGNATIONS)}', ok=False)
+            return
+        role = args[0].lower()
+        success = self._designator.set_debug_role(role)
+        if success:
+            self._out(f'Debug overlay: {role}')
+        else:
+            self._out(f"Unknown role: '{role}'", ok=False)
+
+    # -------------------------------------------------------------------------
+    # Alert
+    # -------------------------------------------------------------------------
+
+    def _handle_alert(self, args):
+        from modules.profiler.alerts import parse_condition
+
+        engine = self.feed_manager._alert_engine
+        sub    = args[0].lower()
+        rest   = args[1:]
+
+        if sub == 'add':
             if not rest:
-                self._out('Usage: feed add <source> [fliph] [flipv]', ok=False)
+                self._out(
+                    'Usage: alert add <designation <role>> | '
+                    '<co-presence <role_a> <role_b>> | <ssn <SSN>>',
+                    ok=False
+                )
                 return
-            source = rest[0]
-            if source.isdigit():
-                source = int(source)
-            flags  = [f.lower() for f in rest[1:]]
-            flip_h = 'fliph' in flags
-            flip_v = 'flipv' in flags
             try:
-                fid = self.feed_manager.add_feed(source, flip_h=flip_h, flip_v=flip_v)
-                self._out(f'Feed {fid} added: {source}')
-            except Exception as e:
-                self._out(f'Failed to add feed: {e}', ok=False)
+                cond = parse_condition(rest)
+                rule = engine.add_rule(cond, created_by=self._active_user_ssn)
+                self._out(f'Alert rule {rule.rule_id} added: {rule.condition.describe()}')
+            except ValueError as e:
+                self._out(str(e), ok=False)
 
         elif sub == 'remove':
             if not rest or not rest[0].isdigit():
-                self._out('Usage: feed remove <id>', ok=False)
+                self._out('Usage: alert remove <rule ID>', ok=False)
                 return
-            fid = int(rest[0])
-            self.feed_manager.remove_feed(fid)
-            self._out(f'Feed {fid} removed.')
-
-        elif sub == 'focus':
-            if not rest or not rest[0].isdigit():
-                self._out('Usage: feed focus <id>', ok=False)
-                return
-            fid = int(rest[0])
-            self.feed_manager.focus_feed(fid)
-            self._out(f'Focused feed {fid}.')
-
-        elif sub == 'grid':
-            self.feed_manager.focus_feed(None)
-            self._out('Returned to grid view.')
-
-        elif sub == 'flip':
-            if len(rest) < 2 or not rest[0].isdigit():
-                self._out('Usage: feed flip <id> <h|v|both|reset>', ok=False)
-                return
-            fid  = int(rest[0])
-            mode = rest[1].lower()
-            flip_map = {
-                'h':    (True,  None),
-                'v':    (None,  True),
-                'both': (True,  True),
-                'reset': (False, False),
-            }
-            if mode not in flip_map:
-                self._out('Flip mode must be: h, v, both, or reset', ok=False)
-                return
-            fh, fv = flip_map[mode]
-            ok = self.feed_manager.flip_feed(fid, flip_h=fh, flip_v=fv)
-            if ok:
-                self._out(f'Feed {fid} flip set to: {mode}')
+            rid = int(rest[0])
+            if engine.remove_rule(rid):
+                self._out(f'Alert rule {rid} removed.')
             else:
-                self._out(f'Feed {fid} not found.', ok=False)
+                self._out(f'No alert rule with ID {rid}.', ok=False)
+
+        elif sub == 'list':
+            rules = engine.list_rules()
+            if not rules:
+                self._out('No alert rules defined.')
+                return
+            self._out(f'{len(rules)} rule(s):')
+            for r in rules:
+                mute_tag = '  [MUTED]' if r.muted else ''
+                self._out(f'  [{r.rule_id}]  {r.condition.describe()}{mute_tag}')
+
+        elif sub == 'mute':
+            if not rest:
+                engine.mute_all()
+                self._out('All alerts muted.')
+                return
+            if not rest[0].isdigit():
+                self._out('Usage: alert mute [rule ID]', ok=False)
+                return
+            rid = int(rest[0])
+            if engine.mute_rule(rid):
+                self._out(f'Alert rule {rid} muted.')
+            else:
+                self._out(f'No alert rule with ID {rid}.', ok=False)
+
+        elif sub == 'unmute':
+            if not rest:
+                engine.unmute_all()
+                self._out('All alerts unmuted.')
+                return
+            if not rest[0].isdigit():
+                self._out('Usage: alert unmute [rule ID]', ok=False)
+                return
+            rid = int(rest[0])
+            if engine.unmute_rule(rid):
+                self._out(f'Alert rule {rid} unmuted.')
+            else:
+                self._out(f'No alert rule with ID {rid}.', ok=False)
 
         else:
-            self._out(f"Unknown feed subcommand: '{sub}'", ok=False)
+            self._out(f"Unknown alert subcommand: '{sub}'", ok=False)
 
     # -------------------------------------------------------------------------
-    # Profiler commands
+    # Profiler
     # -------------------------------------------------------------------------
 
     def _handle_profiler(self, args):
         sub  = args[0].lower()
         rest = args[1:]
 
+        if sub in PROFILER_DESKTOP_ONLY:
+            self._out(f"'profiler {sub}' is not available from the web interface.", ok=False)
+            return
+
         if sub == 'list':
             persons = self.db.get_all()
             if not persons:
                 self._out('No persons on record.')
                 return
-            self._out('--- PERSONS ON RECORD ---')
+            self._out(f'{len(persons)} person(s) on record:')
             for p in persons:
                 _, ssn, name, designation, notes, last_ts, last_feed = p
                 self._out(
@@ -269,7 +355,6 @@ class CommandProcessor:
                     f'{designation.upper():<12}  '
                     f'last seen: {last_ts or "never"}'
                 )
-            self._out(f'{len(persons)} person(s) on record.')
 
         elif sub == 'info':
             if not rest:
@@ -280,31 +365,11 @@ class CommandProcessor:
                 self._out(f'No person found: {rest[0]}', ok=False)
                 return
             _, ssn, name, designation, notes, last_ts, last_feed = person
-            self._out(f'--- {ssn} ---')
-            self._out(f'  Name:        {name or "UNKNOWN"}')
-            self._out(f'  Designation: {designation.upper()}')
-            self._out(f'  Notes:       {notes or "—"}')
-            self._out(f'  Last seen:   {last_ts or "never"} (feed {last_feed})')
-
-        elif sub == 'enroll':
-            if not rest:
-                self._out('Usage: profiler enroll <filename>', ok=False)
-                return
-            path = os.path.join(IMAGES_DIR, rest[0])
-            if not os.path.exists(path):
-                self._out(f'Image not found: {path}', ok=False)
-                return
-            ssn, success, error = self.db.enroll_from_image(
-                self.feed_manager.app, path, designation='irrelevant'
-            )
-            if success:
-                os.remove(path)
-                self._out(
-                    f'Enrolled → {ssn}. '
-                    f'Use: profiler update {ssn} name <name>'
-                )
-            else:
-                self._out(f'Enrollment failed: {error}', ok=False)
+            self._out(f'ID:          {ssn}')
+            self._out(f'Name:        {name or "UNKNOWN"}')
+            self._out(f'Designation: {designation.upper()}')
+            self._out(f'Notes:       {notes or "—"}')
+            self._out(f'Last seen:   {last_ts or "never"} (feed {last_feed})')
 
         elif sub == 'update':
             if len(rest) < 3:
@@ -319,40 +384,62 @@ class CommandProcessor:
             value = ' '.join(rest[2:])
 
             if field == 'designation':
-                if value == 'admin' and not self._is_root():
-                    self._out('Only root can assign admin designation.', ok=False)
+                if not self._is_root():
+                    self._out('Only root can change designations.', ok=False)
                     return
                 if value not in DESIGNATIONS:
                     self._out(
-                        f'Invalid designation. '
-                        f'Options: {", ".join(DESIGNATIONS)}',
+                        f'Invalid designation. Options: {", ".join(DESIGNATIONS)}',
                         ok=False
                     )
                     return
 
-            ok = self.db.update_person(ssn, field, value)
-            if ok:
+            if self.db.update_person(ssn, field, value):
                 self._out(f'Updated {field} for {ssn}.')
             else:
                 self._out(f'Update failed for {ssn}.', ok=False)
 
+        elif sub == 'remove':
+            if not self._is_root():
+                self._out('Access denied — root authentication required.', ok=False)
+                return
+            if not rest:
+                self._out('Usage: profiler remove <SSN>', ok=False)
+                return
+            ssn = rest[0]
+            if ssn == '000-00-0000':
+                self._out('Cannot remove root user.', ok=False)
+                return
+            if self.db.remove_person(ssn):
+                self._out(f'Removed {ssn}.')
+            else:
+                self._out(f'No person found: {ssn}', ok=False)
+
+        elif sub == 'neutralize':
+            if not self._is_root():
+                self._out('Access denied — root authentication required.', ok=False)
+                return
+            if not rest:
+                self._out('Usage: profiler neutralize <SSN> [note]', ok=False)
+                return
+            ssn  = rest[0]
+            note = ' '.join(rest[1:]) or None
+            person = self.db.get_by_ssn(ssn)
+            if not person:
+                self._out(f'No person found: {ssn}', ok=False)
+                return
+            prev_desig = person[3]
+            if prev_desig not in ('threat', 'victim', 'perpetrator'):
+                self._out(
+                    f'{ssn} is already {prev_desig.upper()} — no neutralization needed.',
+                    ok=False
+                )
+                return
+            self.db.neutralize_subject(ssn, prev_desig,
+                                       operator_ssn=self._active_user_ssn, note=note)
+            self._designator.reset_neutralization_monitor(ssn)
+            name = person[2] or ssn
+            self._out(f'Neutralized {name} ({ssn}) — {prev_desig.upper()} → IRRELEVANT.')
+
         else:
             self._out(f"Unknown profiler subcommand: '{sub}'", ok=False)
-
-    # -------------------------------------------------------------------------
-    # Reload
-    # -------------------------------------------------------------------------
-
-    def _handle_reload(self):
-        all_ok, report = self.feed_manager.reload_all()
-        new_mods = self.feed_manager.scan_new_modules()
-        self._out('--- HOT RELOAD ---')
-        for line in report:
-            self._out(f'  {line}')
-        if new_mods:
-            self._out('  New modules detected (not auto-imported):')
-            for m in new_mods[:5]:
-                self._out(f'    {m}')
-            if len(new_mods) > 5:
-                self._out(f'    ... and {len(new_mods) - 5} more')
-        self._out('Reload complete.' if all_ok else 'Some reloads failed.', ok=all_ok)

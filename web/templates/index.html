@@ -442,6 +442,18 @@
       font-size: 16px;
     }
 
+    .tab-btn .tab-icon-img {
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+      filter: brightness(0) invert(0.27);
+      transition: filter .15s;
+    }
+
+    .tab-btn.active .tab-icon-img {
+      filter: brightness(0) invert(1);
+    }
+
     .tab-btn.active {
       color: var(--green);
       border-bottom-color: var(--green);
@@ -472,6 +484,18 @@
       display: grid;
       grid-template-columns: 1fr;
       gap: 10px;
+    }
+
+    /* On wide screens, a lone feed shouldn't span the full width. */
+    @media (min-width: 700px) {
+      #tab-feeds .feed-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      #tab-feeds .feed-grid.single-feed {
+        grid-template-columns: minmax(0, 640px);
+        justify-content: center;
+      }
     }
 
     .feed-card {
@@ -895,6 +919,55 @@
       margin-top: 3px;
     }
 
+    /* ── Enroll prompt form (scan tab) ──────────────────────────────── */
+    .enroll-form {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .enroll-form .enroll-label {
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--dim);
+      margin-top: 6px;
+    }
+
+    .enroll-form select,
+    .enroll-form textarea {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 9px 10px;
+      width: 100%;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      border-radius: 0;
+    }
+
+    .enroll-form select:focus,
+    .enroll-form textarea:focus {
+      border-color: var(--green);
+    }
+
+    .enroll-form textarea {
+      resize: vertical;
+      min-height: 44px;
+    }
+
+    .enroll-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .enroll-actions .btn {
+      flex: 1;
+    }
+
     #scan-status {
       margin-top: 10px;
       text-align: center;
@@ -986,16 +1059,16 @@
     <!-- Tab bar -->
     <div id="tab-bar">
       <button class="tab-btn active" id="tbtn-feeds" onclick="switchTab('feeds')">
-        <span class="tab-icon">📡</span>FEEDS
+        <img class="tab-icon-img" src="/static/feeds.png" alt="">FEEDS
       </button>
       <button class="tab-btn" id="tbtn-subjects" onclick="switchTab('subjects')">
-        <span class="tab-icon">👤</span>SUBJECTS
+        <img class="tab-icon-img" src="/static/subjects.png" alt="">SUBJECTS
       </button>
       <button class="tab-btn" id="tbtn-console" onclick="switchTab('console')">
-        <span class="tab-icon">⌨</span>CONSOLE
+        <img class="tab-icon-img" src="/static/console.png" alt="">CONSOLE
       </button>
       <button class="tab-btn" id="tbtn-scan" onclick="switchTab('scan')">
-        <span class="tab-icon">🎯</span>SCAN
+        <img class="tab-icon-img" src="/static/scan.png" alt="">SCAN
       </button>
     </div>
 
@@ -1074,8 +1147,10 @@
     let cmdHistory = [];
     let historyIdx = -1;
     let scanStream = null;
+    let lastScanBlob = null;
     let verifyStream = null;
     let subjectPoll = null;
+    let feedPoll = null;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Screen management
@@ -1161,7 +1236,7 @@
       stopCameraVerify();
       showScreen('dashboard');
       switchTab('feeds');
-      loadFeeds();
+      startFeedPolling();
       startSubjectPolling();
 
       // Welcome line in console
@@ -1316,40 +1391,86 @@
     // ═══════════════════════════════════════════════════════════════════════════
     // Feeds
     // ═══════════════════════════════════════════════════════════════════════════
-    async function loadFeeds() {
+    async function loadFeeds(silent = false) {
       try {
         const resp = await fetch('/api/feeds');
         const feeds = await resp.json();
-        renderFeeds(feeds);
+        reconcileFeeds(feeds);
       } catch (e) {
-        document.getElementById('feed-grid').innerHTML =
-          '<div class="no-feeds">ERROR LOADING FEEDS</div>';
+        // During polling, a transient error shouldn't wipe live streams.
+        if (!silent) {
+          document.getElementById('feed-grid').innerHTML =
+            '<div class="no-feeds">ERROR LOADING FEEDS</div>';
+        }
       }
     }
 
-    function renderFeeds(feeds) {
-      const grid = document.getElementById('feed-grid');
-      if (!feeds.length) {
-        grid.innerHTML = '<div class="no-feeds">NO ACTIVE FEEDS</div>';
-        return;
-      }
-      grid.innerHTML = feeds.map(f => `
-    <div class="feed-card">
+    function feedCardHtml(f) {
+      return `
+    <div class="feed-card" data-feed-id="${f.id}">
       <div class="feed-label">
-        <span>FEED ${f.id} // ${f.source}</span>
-        <span class="feed-status">${f.status.toUpperCase()}</span>
+        <span>FEED ${f.id} // ${escHtml(String(f.source))}</span>
+        <span class="feed-status">${escHtml(String(f.status).toUpperCase())}</span>
       </div>
       <img class="feed-stream"
            src="/api/feed/${f.id}/stream"
            alt="Feed ${f.id}"
            onerror="this.style.minHeight='80px'">
-    </div>
-  `).join('');
+    </div>`;
+    }
+
+    // Update the grid in place: add new feeds, drop removed ones, refresh
+    // status text — without recreating the <img> of feeds that persist, so
+    // their MJPEG streams are never interrupted by a poll.
+    function reconcileFeeds(feeds) {
+      const grid = document.getElementById('feed-grid');
+
+      if (!feeds.length) {
+        grid.innerHTML = '<div class="no-feeds">NO ACTIVE FEEDS</div>';
+        grid.classList.remove('single-feed');
+        return;
+      }
+
+      // Clear the placeholder/empty state before the first real card lands.
+      if (!grid.querySelector('.feed-card')) grid.innerHTML = '';
+
+      const incoming = new Set(feeds.map(f => String(f.id)));
+
+      // Remove cards for feeds that no longer exist.
+      grid.querySelectorAll('.feed-card').forEach(card => {
+        if (!incoming.has(card.dataset.feedId)) card.remove();
+      });
+
+      // Add new cards; update status on existing ones (leave the stream alone).
+      feeds.forEach(f => {
+        const id = String(f.id);
+        const card = grid.querySelector(`.feed-card[data-feed-id="${id}"]`);
+        if (!card) {
+          grid.insertAdjacentHTML('beforeend', feedCardHtml(f));
+        } else {
+          const st = card.querySelector('.feed-status');
+          const newStatus = String(f.status).toUpperCase();
+          if (st && st.textContent !== newStatus) st.textContent = newStatus;
+        }
+      });
+
+      grid.classList.toggle('single-feed', feeds.length === 1);
+    }
+
+    function startFeedPolling() {
+      loadFeeds();
+      feedPoll = setInterval(() => loadFeeds(true), 5000);
+    }
+
+    function stopFeedPolling() {
+      if (feedPoll) { clearInterval(feedPoll); feedPoll = null; }
     }
 
     function clearFeeds() {
+      stopFeedPolling();
       document.getElementById('feed-grid').innerHTML =
         '<div class="no-feeds">NO ACTIVE FEEDS</div>';
+      document.getElementById('feed-grid').classList.remove('single-feed');
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1549,6 +1670,7 @@
     }
 
     async function submitScanImage(blob) {
+      lastScanBlob = blob;
       setScanStatus('<span class="spinner"></span> IDENTIFYING...', 'dim');
       document.getElementById('scan-result').innerHTML = '';
       document.getElementById('tab-scan').classList.add('scanning');
@@ -1576,8 +1698,16 @@
           multiple_faces: `MULTIPLE FACES DETECTED (${data.count || '?'}) — USE SINGLE-SUBJECT IMAGE`,
           bad_image: 'IMAGE COULD NOT BE PROCESSED',
           no_image: 'NO IMAGE RECEIVED',
+          bad_designation: 'INVALID ROLE SELECTED',
         };
         setScanStatus(msgs[data.reason] || 'SCAN FAILED', 'err');
+        return;
+      }
+
+      // Unknown subject — show enrollment prompt instead of auto-enrolling.
+      if (data.pending) {
+        renderEnrollPrompt(data.suggested || {});
+        setScanStatus('UNKNOWN SUBJECT — CONFIRM ENROLLMENT', 'amber');
         return;
       }
 
@@ -1588,8 +1718,8 @@
         setScanStatus('MATCH FOUND', 'ok');
       } else {
         cssClass = 'enrolled';
-        title = 'UNKNOWN SUBJECT — AUTO-ENROLLED';
-        setScanStatus(`NEW SUBJECT ENROLLED AS ${data.designation.toUpperCase()}`, 'amber');
+        title = 'SUBJECT ENROLLED';
+        setScanStatus(`ENROLLED AS ${data.designation.toUpperCase()}`, 'amber');
       }
 
       const desg = data.designation || 'irrelevant';
@@ -1613,6 +1743,62 @@
 
       // Refresh subjects in case someone was just enrolled
       if (!data.matched) loadSubjects();
+    }
+
+    function renderEnrollPrompt(s) {
+      const roles = s.designations && s.designations.length ? s.designations : ['irrelevant'];
+      const opts = roles.map(r =>
+        `<option value="${r}" ${r === s.designation ? 'selected' : ''}>${r.toUpperCase()}</option>`
+      ).join('');
+
+      document.getElementById('scan-result').innerHTML = `
+    <div class="scan-result-card no-match">
+      <div class="sr-title">UNKNOWN SUBJECT — ENROLL?</div>
+      <div class="enroll-form">
+        <label class="enroll-label">NAME (OPTIONAL)</label>
+        <input type="text" id="enroll-name" placeholder="UNKNOWN" autocomplete="off">
+        <label class="enroll-label">ROLE</label>
+        <select id="enroll-role">${opts}</select>
+        <label class="enroll-label">NOTES (OPTIONAL)</label>
+        <textarea id="enroll-notes" rows="2">${escHtml(s.notes || '')}</textarea>
+        <div class="enroll-actions">
+          <button class="btn" onclick="confirmEnroll()">CONFIRM ENROLL</button>
+          <button class="btn danger" onclick="cancelEnroll()">CANCEL</button>
+        </div>
+      </div>
+    </div>`;
+    }
+
+    async function confirmEnroll() {
+      if (!lastScanBlob) { setScanStatus('NO IMAGE TO ENROLL — RESCAN', 'err'); return; }
+
+      const name = document.getElementById('enroll-name').value.trim();
+      const role = document.getElementById('enroll-role').value;
+      const notes = document.getElementById('enroll-notes').value.trim();
+
+      setScanStatus('<span class="spinner"></span> ENROLLING...', 'dim');
+      document.querySelectorAll('.enroll-actions .btn').forEach(b => b.disabled = true);
+
+      const fd = new FormData();
+      fd.append('image', lastScanBlob, 'scan.jpg');
+      fd.append('name', name);
+      fd.append('notes', notes);
+      fd.append('designation', role);
+
+      try {
+        const resp = await fetch('/api/enroll', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderScanResult(data);
+      } catch (e) {
+        setScanStatus('CONNECTION ERROR', 'err');
+        document.querySelectorAll('.enroll-actions .btn').forEach(b => b.disabled = false);
+      }
+    }
+
+    function cancelEnroll() {
+      lastScanBlob = null;
+      document.getElementById('scan-result').innerHTML = '';
+      setScanStatus('ENROLLMENT CANCELLED', 'dim');
     }
 
     function setScanStatus(html, cls) {

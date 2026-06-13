@@ -14,13 +14,35 @@ from flask import Flask, Response, jsonify, request, send_file
 from modules.core.command_processor import CommandProcessor
 from modules.profiler.heuristics import generate as gen_heuristics
 from modules.profiler.recognition import (
-    LIVE_ENROLL_DESIGNATIONS, LIVE_ENROLL_WEIGHTS, save_enrolled_image
+    LIVE_ENROLL_DESIGNATIONS, LIVE_ENROLL_WEIGHTS, save_enrolled_image,
+    _get_random_description,
 )
+
+# Roles selectable when manually enrolling from the web scan tab.
+# Same pool auto-suggest draws from, plus 'admin'. 'root' is intentionally
+# excluded — there is only ever one root.
+WEB_ENROLL_DESIGNATIONS = list(LIVE_ENROLL_DESIGNATIONS) + ['admin']
 
 # Module-level singletons set by start_internal_api()
 _feed_manager = None
 _db           = None
 _cmd_proc     = None
+
+
+def _detect_single_face(frame):
+    """Run detection and require exactly one usable face.
+
+    Returns (face, None) on success, or (None, (reason, detail)) on failure,
+    where detail is the face count for 'multiple_faces' and None otherwise.
+    """
+    faces = _feed_manager.app.get(frame)
+    if not faces:
+        return None, ('no_face', None)
+    if len(faces) > 1:
+        return None, ('multiple_faces', len(faces))
+    if faces[0].embedding is None:
+        return None, ('no_embedding', None)
+    return faces[0], None
 
 
 # =============================================================================
@@ -220,20 +242,15 @@ def _create_app():
             if frame is None:
                 return jsonify({'ok': False, 'reason': 'bad_image'})
 
-            faces = _feed_manager.app.get(frame)
-            if not faces:
-                return jsonify({'ok': False, 'reason': 'no_face'})
-            if len(faces) > 1:
-                return jsonify({
-                    'ok':    False,
-                    'reason': 'multiple_faces',
-                    'count': len(faces),
-                })
+            face, err = _detect_single_face(frame)
+            if err:
+                reason, detail = err
+                resp = {'ok': False, 'reason': reason}
+                if detail is not None:
+                    resp['count'] = detail
+                return jsonify(resp)
 
-            embedding = faces[0].embedding
-            if embedding is None:
-                return jsonify({'ok': False, 'reason': 'no_embedding'})
-
+            embedding = face.embedding
             match = _db.identify(embedding)
             if match:
                 ssn, name, designation, sim = match
@@ -246,21 +263,76 @@ def _create_app():
                     'confidence':  round(float(sim) * 100, 1),
                 })
 
-            # No match — auto-enroll
+            # No match — suggest enrollment but do NOT enroll yet. The client
+            # confirms (and may edit name/role/notes) via POST /enroll.
             designation = random.choices(
                 LIVE_ENROLL_DESIGNATIONS, weights=LIVE_ENROLL_WEIGHTS, k=1
             )[0]
-            ssn  = _db.enroll(embedding, designation)
-            bbox = faces[0].bbox.astype(int)
+            notes = _get_random_description(designation) or ''
+            return jsonify({
+                'ok':       True,
+                'matched':  False,
+                'pending':  True,
+                'suggested': {
+                    'name':         'UNKNOWN',
+                    'designation':  designation,
+                    'notes':        notes,
+                    'designations': WEB_ENROLL_DESIGNATIONS,
+                },
+            })
+
+        finally:
+            os.unlink(tmp.name)
+
+    @app.route('/enroll', methods=['POST'])
+    def enroll():
+        if 'image' not in request.files:
+            return jsonify({'ok': False, 'reason': 'no_image'})
+
+        designation = (request.form.get('designation') or '').strip().lower()
+        if designation not in WEB_ENROLL_DESIGNATIONS:
+            return jsonify({'ok': False, 'reason': 'bad_designation'})
+
+        # Blank name/notes fall back to defaults (NULL name → "UNKNOWN";
+        # NULL notes → a generated description for the chosen designation).
+        name  = (request.form.get('name')  or '').strip() or None
+        notes = (request.form.get('notes') or '').strip() or None
+
+        tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+        request.files['image'].save(tmp.name)
+        tmp.close()
+
+        try:
+            frame = cv2.imread(tmp.name)
+            if frame is None:
+                return jsonify({'ok': False, 'reason': 'bad_image'})
+
+            face, err = _detect_single_face(frame)
+            if err:
+                reason, detail = err
+                resp = {'ok': False, 'reason': reason}
+                if detail is not None:
+                    resp['count'] = detail
+                return jsonify(resp)
+
+            ssn  = _db.enroll(face.embedding, designation, name=name, notes=notes)
+            bbox = face.bbox.astype(int)
             save_enrolled_image(ssn, frame, bbox)
+
+            # Read back so the response reflects stored values (e.g. a
+            # generated note when the client left notes blank).
+            person = _db.get_by_ssn(ssn)
+            final_name  = person[2] if person else name
+            final_notes = person[4] if person else notes
 
             return jsonify({
                 'ok':          True,
                 'matched':     False,
                 'enrolled':    True,
                 'ssn':         ssn,
-                'name':        'UNKNOWN',
+                'name':        final_name or 'UNKNOWN',
                 'designation': designation,
+                'notes':       final_notes or '',
             })
 
         finally:
