@@ -75,7 +75,7 @@ scikit-image==0.26.0
 scikit-learn==1.8.0
 scipy==1.17.1
 seaborn==0.13.2
-setuptools==81.0.0
+setuptools<81
 simsimd==6.5.16
 six==1.17.0
 sounddevice==0.5.5

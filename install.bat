@@ -25,7 +25,7 @@ echo [OK] Python %PYTHON_VERSION% detected
 echo.
 
 REM Create virtual environment using py -3.12 explicitly
-echo [1/8] Creating virtual environment...
+echo [1/9] Creating virtual environment...
 if exist "venv" (
     echo Virtual environment already exists, skipping creation
 ) else (
@@ -55,29 +55,31 @@ echo [OK] venv Python: %VENV_VERSION%
 echo.
 
 REM Check for CUDA
-echo [2/8] Checking for CUDA installation...
+echo [2/9] Checking for CUDA installation...
 nvcc --version >nul 2>&1
 if errorlevel 1 (
-    echo NOTE: CUDA Toolkit not detected (optional, recommended for performance)
-    echo App will run on CPU. See INSTALL.md for GPU setup.
+    echo NOTE: CUDA Toolkit not detected. App will run on CPU.
+    echo See INSTALL.md for optional GPU setup.
 ) else (
-    echo [OK] CUDA Toolkit detected
+    echo [OK] CUDA Toolkit detected - GPU acceleration enabled
 )
 echo.
 
-REM Upgrade pip, setuptools, wheel
-echo [3/8] Upgrading pip, setuptools, and wheel...
-python -m pip install --upgrade pip setuptools wheel --quiet
+REM Upgrade pip and wheel. Pin setuptools below 81 because setuptools 81
+REM removed importable pkg_resources, which breaks legacy source builds (lap).
+echo [3/9] Upgrading pip and wheel, pinning setuptools...
+python -m pip install --upgrade pip wheel --quiet
+python -m pip install "setuptools<81" --quiet
 if errorlevel 1 (
-    echo ERROR: Failed to upgrade pip/setuptools
+    echo ERROR: Failed to set up pip/setuptools/wheel
     pause
     exit /b 1
 )
-echo [OK] pip, setuptools, and wheel upgraded
+echo [OK] pip, setuptools (<81), and wheel ready
 echo.
 
-REM Pre-install lapx (bypasses lap/insightface/bytetracker conflicts)
-echo [4/8] Pre-installing lapx (lap conflict workaround)...
+REM Pre-install lapx (provides the lap module, bypasses lap build conflicts)
+echo [4/9] Pre-installing lapx (lap conflict workaround)...
 python -m pip install lapx==0.9.4 --quiet
 if errorlevel 1 (
     echo WARNING: lapx pre-install had issues, will retry in main install
@@ -86,7 +88,7 @@ echo [OK] lapx prepared
 echo.
 
 REM Pre-install bytetracker with --no-deps (dependency workaround)
-echo [5/8] Pre-installing bytetracker (--no-deps workaround)...
+echo [5/9] Pre-installing bytetracker (--no-deps workaround)...
 python -m pip install --no-deps bytetracker==0.3.2 --quiet
 if errorlevel 1 (
     echo WARNING: bytetracker pre-install failed, will attempt in main install
@@ -94,20 +96,19 @@ if errorlevel 1 (
 echo [OK] bytetracker prepared
 echo.
 
-REM Pre-install playsound from git (try git first, fallback to PyPI)
-echo [6/8] Pre-installing playsound...
-python -m pip install "git+https://github.com/taconi/playsound@92385c78ec05c2fc3afad1afc5edc9d1282aa1e5" --quiet 2>nul
+REM Pre-install playsound from PyPI
+echo [6/9] Pre-installing playsound...
+python -m pip install playsound==1.2.2 --quiet
 if errorlevel 1 (
-    echo WARNING: playsound git install failed, using PyPI version
-    python -m pip install playsound==1.2.2 --quiet
+    echo WARNING: playsound pre-install failed, will retry in main install
 )
 echo [OK] playsound prepared
 echo.
 
 REM Install ALL dependencies from requirements.txt
-echo [6/8] Installing all dependencies from requirements.txt...
+echo [7/9] Installing all dependencies from requirements.txt...
 echo This may take several minutes (installing torch, onnxruntime, etc)...
-python -m pip install -r requirements.txt --quiet
+python -m pip install -r requirements.txt --prefer-binary --quiet
 if errorlevel 1 (
     echo WARNING: Some packages may have failed to install
     echo Check output above for details
@@ -117,12 +118,12 @@ echo [OK] Dependencies installed
 echo.
 
 REM Verify critical imports
-echo [7/8] Verifying critical imports...
-python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch" >nul 2>&1
+echo [8/9] Verifying critical imports...
+python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch; import lap; import bytetracker" >nul 2>&1
 if errorlevel 1 (
     echo WARNING: Some critical imports failed
-    echo Try: python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch"
-    echo to see full error details
+    echo Run this to see the full error:
+    echo   python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch; import lap; import bytetracker"
     pause
     exit /b 1
 ) else (
@@ -131,7 +132,7 @@ if errorlevel 1 (
 echo.
 
 REM Create necessary directories
-echo [8/8] Creating application directories...
+echo [9/9] Creating application directories...
 if not exist "config" mkdir config
 if not exist "logs" mkdir logs
 
@@ -143,7 +144,7 @@ echo Installation Complete!
 echo ========================================
 echo.
 echo Installed packages:
-python -m pip list --quiet | find /V "WARNING"
+python -m pip list
 echo.
 echo IMPORTANT: Always activate venv before running:
 echo   call venv\Scripts\activate.bat
@@ -157,7 +158,6 @@ echo.
 echo If you encounter issues:
 echo  - Verify venv is active (should see "(venv)" in prompt)
 echo  - For GPU speedup: Check INSTALL.md for optional CUDA 12.x setup
-echo  - Verify all imports work: python -c "import insightface; import PyQt5; import torch"
 echo  - Reinstall package: pip install --force-reinstall --no-cache-dir [package]
 echo  - Check GitHub issues for known solutions
 echo.
