@@ -177,6 +177,10 @@ First off, I sincerely apologise for the designations I've given Shaw, Harold, F
 This being said, PoI is a great show which was way ahead of its' time, and to anyone who hasn't watched it, I strongly recommend that you do.  
 The same goes for Watch_Dogs - if you haven't played it, try it out. The system requirements are about equal to a potato.  
 
+Anyways, this project started after I recently decided to rewatch the series (and bring on a new fan), and I must say, both the development of this (which took many hours of work, debugging and pretending to listen in college classes) and going through the show once again was incredible, and if only I had spent even less time listening to classes, this project would be finished at the same time as I finished rewatching the show (though less than a week later is not bad either).
+
+I'd like to thank all the cast and crew of the show for giving the world this amazing series, and for giving me inspiration to do what I did here.
+
 Enjoy!
 
 ---
