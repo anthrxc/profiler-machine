@@ -1,313 +1,278 @@
 #!/usr/bin/env python3
 """
 Profiler Machine Installation Script
-Handles Python 3.12 constraints and dependency workarounds for Windows
+Handles Python 3.12 constraints and dependency workarounds.
+
+Mirrors install.bat. Creates a venv with Python 3.12, then runs every pip
+command through the venv's own interpreter (a running Python process cannot
+"activate" a venv in-place the way a shell can, so we call the venv python
+explicitly via subprocess).
 """
 
-import sys
-import subprocess
 import os
-import platform
+import sys
+import shutil
+import subprocess
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent
+VENV_DIR = ROOT / "venv"
+CONSTRAINTS = ROOT / "constraints.txt"
 
-class Installer:
-    def __init__(self):
-        self.errors = []
-        self.warnings = []
-        self.venv_python = sys.executable
-        
-    def log_error(self, msg):
-        print(f"❌ ERROR: {msg}")
-        self.errors.append(msg)
-    
-    def log_warning(self, msg):
-        print(f"⚠️  WARNING: {msg}")
-        self.warnings.append(msg)
-    
-    def log_success(self, msg):
-        print(f"✓ {msg}")
-    
-    def check_python_version(self):
-        """Verify Python 3.12.x is running"""
-        print("\n[1/8] Checking Python version...")
-        
-        major, minor, micro = sys.version_info[:3]
-        version_str = f"{major}.{minor}.{micro}"
-        
-        if major != 3 or minor != 12:
-            self.log_error(f"Python 3.12.x required, found {version_str}")
-            self.log_error("Python 3.14+ is incompatible with onnxruntime/lapx")
-            return False
-        
-        self.log_success(f"Python {version_str} detected")
-        return True
-    
-    def check_os(self):
-        """Verify Windows platform"""
-        print("\n[2/8] Checking OS...")
-        
-        if platform.system() != "Windows":
-            self.log_warning(f"Script optimized for Windows, detected {platform.system()}")
-            self.log_warning("Some paths/commands may not work correctly")
-            return True
-        
-        self.log_success("Windows detected")
-        return True
-    
-    def check_cuda(self):
-        """Check for CUDA installation (optional)"""
-        print("\n[3/8] Checking for CUDA...")
-        
-        try:
-            result = subprocess.run(
-                ["nvcc", "--version"],
-                capture_output=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                self.log_success("CUDA Toolkit detected (GPU acceleration enabled)")
-                return True
-            else:
-                print("      CUDA not found (optional - app will run on CPU)")
-                print("      See INSTALL.md for optional GPU setup")
-                return True
-        except FileNotFoundError:
-            print("      CUDA Toolkit not in PATH (optional - app will run on CPU)")
-            print("      See INSTALL.md for optional GPU setup")
-            return True
-        except Exception as e:
-            self.log_warning(f"Could not check CUDA: {str(e)[:100]}")
-            return True
-    
-    def create_venv(self):
-        """Create virtual environment"""
-        print("\n[4/8] Creating virtual environment...")
-        
-        venv_path = Path("venv")
-        if venv_path.exists():
-            self.log_success("venv directory already exists")
-        else:
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "venv", "venv"],
-                    capture_output=True,
-                    check=True,
-                    timeout=60
-                )
-                self.log_success("Virtual environment created")
-            except subprocess.CalledProcessError as e:
-                self.log_error(f"Failed to create venv: {e.stderr.decode()[:200]}")
-                return False
-            except Exception as e:
-                self.log_error(f"Unexpected error: {str(e)}")
-                return False
-        
-        # Set Python executable to use venv version
-        if platform.system() == "Windows":
-            self.venv_python = str(venv_path / "Scripts" / "python.exe")
-        else:
-            self.venv_python = str(venv_path / "bin" / "python")
-        
-        return True
-    
-    def upgrade_pip(self):
-        """Upgrade pip, setuptools, wheel in venv"""
-        print("\n[5/8] Upgrading pip and setuptools...")
-        
-        try:
-            subprocess.run(
-                [self.venv_python, "-m", "pip", "install", "--upgrade", 
-                 "pip", "setuptools", "wheel"],
-                capture_output=True,
-                check=True,
-                timeout=300
-            )
-            self.log_success("pip and setuptools upgraded")
-            return True
-        except subprocess.CalledProcessError as e:
-            self.log_error(f"Failed to upgrade pip: {e.stderr.decode()[:200]}")
-            return False
-        except Exception as e:
-            self.log_error(f"Unexpected error: {str(e)}")
-            return False
-    
-    def pre_install_problematic(self):
-        """Pre-install packages that fail in requirements.txt"""
-        print("\n[6/8] Pre-installing problematic packages...")
-        
-        # Install bytetracker with --no-deps
-        print("      Installing bytetracker (--no-deps)...")
-        try:
-            subprocess.run(
-                [self.venv_python, "-m", "pip", "install", "--no-deps",
-                 "bytetracker==0.3.2"],
-                capture_output=True,
-                check=False,
-                timeout=300
-            )
-            self.log_success("bytetracker (--no-deps)")
-        except Exception as e:
-            self.log_warning(f"bytetracker pre-install: {str(e)[:100]}")
-        
-        # Install playsound from git
-        print("      Installing playsound from git...")
-        try:
-            subprocess.run(
-                [self.venv_python, "-m", "pip", "install",
-                 "git+https://github.com/taconi/playsound@92385c78ec05c2fc3afad1afc5edc9d1282aa1e5"],
-                capture_output=True,
-                check=False,
-                timeout=300
-            )
-            self.log_success("playsound (git)")
-        except Exception:
-            # Fallback to PyPI version
-            print("      Falling back to playsound==1.2.2 from PyPI...")
-            try:
-                subprocess.run(
-                    [self.venv_python, "-m", "pip", "install", "playsound==1.2.2"],
-                    capture_output=True,
-                    check=False,
-                    timeout=300
-                )
-                self.log_success("playsound (PyPI fallback)")
-            except Exception as e:
-                self.log_warning(f"playsound fallback: {str(e)[:100]}")
-    
-    def install_requirements(self):
-        """Install from requirements.txt (bytetracker/playsound already done)"""
-        print("\n[7/8] Installing remaining dependencies from requirements.txt...")
-        print("      (This may take 5-10 minutes...)")
-        
-        req_path = Path("requirements.txt")
-        if not req_path.exists():
-            self.log_error("requirements.txt not found in current directory")
-            return False
-        
-        try:
-            subprocess.run(
-                [self.venv_python, "-m", "pip", "install", "-r", "requirements.txt",
-                 "--no-warn-script-location", "--ignore-installed", "bytetracker", "playsound"],
-                capture_output=True,
-                check=False,
-                timeout=1200
-            )
-            self.log_success("Dependencies installed (some warnings expected)")
-            return True
-        except subprocess.TimeoutExpired:
-            self.log_error("Installation timed out (>20 minutes)")
-            return False
-        except Exception as e:
-            self.log_error(f"Installation failed: {str(e)}")
-            return False
-    
-    def verify_imports(self):
-        """Test critical imports"""
-        print("\n[8/8] Verifying critical imports...")
-        
-        imports = [
-            ("insightface", "Face recognition"),
-            ("PyQt5", "UI framework"),
-            ("cv2", "Computer vision"),
-            ("onnxruntime", "ONNX inference"),
-            ("bytetrack", "Multi-object tracking"),
-            ("flask", "Web server"),
-            ("sqlite3", "Database"),
-        ]
-        
-        failed = []
-        for module, description in imports:
-            try:
-                # Use venv Python to import
-                result = subprocess.run(
-                    [self.venv_python, "-c", f"import {module}"],
-                    capture_output=True,
-                    check=True,
-                    timeout=10
-                )
-                self.log_success(f"{description} ({module})")
-            except Exception as e:
-                self.log_warning(f"{description} ({module}): {str(e)[:100]}")
-                failed.append(module)
-        
-        if failed:
-            self.log_warning(f"{len(failed)} imports failed, but app may still run")
-            self.log_warning("Check logs/profiler_machine.log after first launch")
-            return True
-        
-        return True
-    
-    def create_directories(self):
-        """Create required directories"""
-        print("\nCreating application directories...")
-        
-        dirs = [
-            "config",
-            "logs",
-        ]
-        
-        for dir_path in dirs:
-            Path(dir_path).mkdir(parents=True, exist_ok=True)
-            self.log_success(f"Directory: {dir_path}")
-    
-    def run(self):
-        """Execute full installation"""
-        print("=" * 50)
-        print("Profiler Machine Installer")
-        print("=" * 50)
-        
-        steps = [
-            ("Python version check", self.check_python_version),
-            ("OS check", self.check_os),
-            ("CUDA check", self.check_cuda),
-            ("Create virtual environment", self.create_venv),
-            ("Upgrade pip", self.upgrade_pip),
-            ("Pre-install problematic packages", self.pre_install_problematic),
-            ("Install remaining dependencies", self.install_requirements),
-            ("Verify imports", self.verify_imports),
-        ]
-        
-        for step_name, step_func in steps:
-            if not step_func():
-                self.log_error(f"Failed at: {step_name}")
-                if step_name not in ["Verify imports"]:
-                    return False
-        
-        self.create_directories()
-        
-        # Print summary
-        print("\n" + "=" * 50)
-        if self.errors:
-            print("Installation FAILED")
-            print("=" * 50)
-            for err in self.errors:
-                print(f"  • {err}")
-            return False
-        else:
-            print("Installation COMPLETE!")
-            print("=" * 50)
-            if self.warnings:
-                print("\nWarnings:")
-                for warn in self.warnings:
-                    print(f"  • {warn}")
-            
-            print("\nIMPORTANT: Always activate venv before running:")
-            if platform.system() == "Windows":
-                print("  call venv\\Scripts\\activate.bat")
-            else:
-                print("  source venv/bin/activate")
-            
-            print("\nNext steps:")
-            print("  1. Activate venv (if not already active)")
-            print("  2. Launch: python main.py")
-            print("  3. Mobile access: Configure Tailscale")
-            print("  4. Errors? Check: logs/profiler_machine.log")
-            print("\nGitHub: https://github.com/antonhrx/profiler-machine")
-            return True
+
+def venv_python() -> Path:
+    """Path to the python executable inside the venv (OS-dependent layout)."""
+    if os.name == "nt":
+        return VENV_DIR / "Scripts" / "python.exe"
+    return VENV_DIR / "bin" / "python"
+
+
+def ok(msg):
+    print(f"[OK] {msg}")
+
+
+def note(msg):
+    print(msg)
+
+
+def fail(msg):
+    print(f"ERROR: {msg}")
+
+
+def run(cmd, check=True, quiet=True, env=None):
+    """Run a command. Returns the CompletedProcess, or None on failure when
+    check=True so callers can emit a WARNING instead of aborting."""
+    kwargs = {"cwd": str(ROOT), "env": env}
+    if quiet:
+        kwargs["stdout"] = subprocess.DEVNULL
+        kwargs["stderr"] = subprocess.DEVNULL
+    result = subprocess.run(cmd, **kwargs)
+    if check and result.returncode != 0:
+        return None
+    return result
+
+
+def pip(args, py=None, quiet=True, env=None):
+    """Invoke pip via the given python (defaults to the venv python)."""
+    python = str(py) if py else str(venv_python())
+    return run([python, "-m", "pip", *args], check=True, quiet=quiet, env=env)
+
+
+def find_python_312():
+    """Return (command_list, version_str) that launches Python 3.12, or (None, None).
+
+    On Windows prefer the 'py -3.12' launcher; otherwise fall back to the
+    interpreter running this script if it happens to be 3.12.
+    """
+    if os.name == "nt":
+        probe = subprocess.run(
+            ["py", "-3.12", "--version"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        if probe.returncode == 0:
+            return ["py", "-3.12"], probe.stdout.strip().split()[-1]
+
+    # Fallback: this interpreter, only if it is 3.12.x
+    major, minor, micro = sys.version_info[:3]
+    if (major, minor) == (3, 12):
+        return [sys.executable], f"{major}.{minor}.{micro}"
+    return None, None
+
+
+def _cleanup():
+    """Remove the temporary constraints file if present."""
+    try:
+        if CONSTRAINTS.exists():
+            CONSTRAINTS.unlink()
+    except OSError:
+        pass
+
+
+def main():
+    print()
+    print("========================================")
+    print("Profiler Machine Installer")
+    print("========================================")
+    print()
+
+    # Python 3.12 check
+    py312, py_version = find_python_312()
+    if py312 is None:
+        fail("Python 3.12 not found")
+        print("Please install Python 3.12.x from https://www.python.org/downloads/")
+        print('Make sure to check "Add to PATH" during installation')
+        sys.exit(1)
+    ok(f"Python {py_version} detected")
+    print()
+
+    # [1/9] Create virtual environment
+    print("[1/9] Creating virtual environment...")
+    if VENV_DIR.exists():
+        print("Virtual environment already exists, skipping creation")
+    else:
+        if run([*py312, "-m", "venv", str(VENV_DIR)], check=True, quiet=True) is None:
+            fail("Failed to create virtual environment")
+            sys.exit(1)
+    if not venv_python().exists():
+        fail("venv python not found after creation")
+        sys.exit(1)
+    ok("Virtual environment ready")
+    print()
+
+    vpy = venv_python()
+
+    # Report the venv interpreter version (parity with the .bat)
+    ver = subprocess.run([str(vpy), "--version"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    ok(f"venv Python: {ver.stdout.strip().split()[-1]}")
+    print()
+
+    # [2/9] CUDA check
+    print("[2/9] Checking for CUDA installation...")
+    cuda_ok = False
+    if shutil.which("nvcc") is not None:
+        nvcc = subprocess.run(["nvcc", "--version"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cuda_ok = nvcc.returncode == 0
+    if cuda_ok:
+        ok("CUDA Toolkit detected - GPU acceleration enabled")
+    else:
+        note("NOTE: CUDA Toolkit not detected. App will run on CPU.")
+        note("See INSTALL.md for optional GPU setup.")
+    print()
+
+    # [3/9] Build constraints (setuptools fix)
+    # setuptools 81 removed importable pkg_resources, which breaks legacy
+    # source builds (e.g. lap, pulled in transitively by ultralytics/bytetracker).
+    # Exporting this constraint via PIP_CONSTRAINT applies the cap to pip's
+    # isolated BUILD envs too, not just this venv.
+    print("[3/9] Configuring build constraints (setuptools fix)...")
+    CONSTRAINTS.write_text("setuptools<81\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["PIP_CONSTRAINT"] = str(CONSTRAINTS)
+
+    pip(["install", "--upgrade", "pip", "wheel"], py=vpy, env=env)
+    if pip(["install", "--upgrade", "setuptools"], py=vpy, env=env) is None:
+        fail("Failed to set up pip/setuptools/wheel")
+        sys.exit(1)
+
+    shown = subprocess.run(
+        [str(vpy), "-m", "pip", "show", "setuptools"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    )
+    setuptools_version = "unknown"
+    for line in shown.stdout.splitlines():
+        if line.startswith("Version:"):
+            setuptools_version = line.split(":", 1)[1].strip()
+            break
+    ok(f"pip and wheel ready, setuptools pinned to {setuptools_version}")
+    print()
+
+    # [4/9] Pre-install lapx (prebuilt wheels, provides the lap import, no compiler)
+    print("[4/9] Pre-installing lapx (lap conflict workaround)...")
+    if pip(["install", "lapx==0.9.4"], py=vpy, env=env) is None:
+        print("WARNING: lapx pre-install had issues, will retry in main install")
+    ok("lapx prepared")
+    print()
+
+    # [5/9] Pre-install bytetracker + ultralytics (--no-deps)
+    # Both declare a dependency on the 'lap' distribution, which only ships as
+    # a source build (needs numpy + a compiler) and keeps failing. lapx above
+    # already provides the 'lap' import at runtime, so installing these
+    # --no-deps stops pip from ever pulling/building real lap. requirements.txt
+    # is a full freeze, so every other dependency is still pinned.
+    print("[5/9] Pre-installing bytetracker and ultralytics (--no-deps workaround)...")
+    if pip(["install", "--no-deps", "bytetracker==0.3.2"], py=vpy, env=env) is None:
+        print("WARNING: bytetracker pre-install failed, will attempt in main install")
+    if pip(["install", "--no-deps", "ultralytics==8.3.50"], py=vpy, env=env) is None:
+        print("WARNING: ultralytics pre-install failed, will attempt in main install")
+    ok("bytetracker and ultralytics prepared")
+    print()
+
+    # [6/9] Pre-install playsound
+    print("[6/9] Pre-installing playsound...")
+    if pip(["install", "playsound==1.2.2"], py=vpy, env=env) is None:
+        print("WARNING: playsound pre-install failed, will retry in main install")
+    ok("playsound prepared")
+    print()
+
+    # [7/9] Install all dependencies
+    # PIP_CONSTRAINT (set above) is still in effect and propagates to any
+    # isolated build env, so pkg_resources is available there.
+    print("[7/9] Installing all dependencies from requirements.txt...")
+    print("This may take several minutes (installing torch, onnxruntime, etc)...")
+    result = pip(
+        ["install", "-r", "requirements.txt", "--prefer-binary"],
+        py=vpy, quiet=False, env=env,
+    )
+    if result is None:
+        print("WARNING: Some packages may have failed to install")
+        print("Check output above for details")
+        print("Installation will continue with verification...")
+    ok("Dependencies installed")
+    print()
+
+    # [8/9] Verify critical imports
+    print("[8/9] Verifying critical imports...")
+    import_check = (
+        "import insightface; import PyQt5; import cv2; import onnxruntime; "
+        "import torch; import lap; import bytetracker; import ultralytics"
+    )
+    verify = subprocess.run(
+        [str(vpy), "-c", import_check],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if verify.returncode != 0:
+        print("WARNING: Some critical imports failed")
+        print("Run this to see the full error:")
+        print(f'  "{vpy}" -c "{import_check}"')
+        _cleanup()
+        sys.exit(1)
+    ok("All critical imports verified")
+    print()
+
+    # [9/9] Create application directories
+    print("[9/9] Creating application directories...")
+    (ROOT / "config").mkdir(exist_ok=True)
+    (ROOT / "logs").mkdir(exist_ok=True)
+    ok("Directories created")
+    print()
+
+    _cleanup()
+    ok("Erased temporary files")
+    print()
+
+    # Done
+    activate = (r"venv\Scripts\activate.bat" if os.name == "nt"
+                else "source venv/bin/activate")
+    print("========================================")
+    print("Installation Complete!")
+    print("========================================")
+    print()
+    print("IMPORTANT: Ignore pip errors about dependency conflicts,")
+    print("  this is expected and the sole purpose of this installation script.")
+    print()
+    print("IMPORTANT: Always activate venv before running:")
+    print(f"  {activate}")
+    print()
+    print("Next steps:")
+    print(f"  1. Activate venv (if not already active): {activate}")
+    print("  2. Launch Profiler Machine: python main.py")
+    print("  3. For mobile access: Configure Tailscale on your network")
+    print("  4. Check logs/profiler_machine.log for errors")
+    print()
+    print("If you encounter issues:")
+    print('  - Verify venv is active (should see "(venv)" in prompt)')
+    print("  - For GPU speedup: Check INSTALL.md for optional CUDA 12.x setup")
+    print("  - Reinstall package: pip install --force-reinstall --no-cache-dir [package]")
+    print("  - Check GitHub issues for known solutions")
+    print()
 
 
 if __name__ == "__main__":
-    installer = Installer()
-    success = installer.run()
-    sys.exit(0 if success else 1)
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInstallation cancelled.")
+        _cleanup()
+        sys.exit(1)

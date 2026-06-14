@@ -1,48 +1,19 @@
 # Profiler Machine Installation Guide
 
-## Quick Start
-
-### Windows Users
-Choose ONE method:
-
-**Option A: Batch Script (Easiest)**
-```
-install.bat
-```
-Double-click or run in Command Prompt. Script handles all workarounds.
-
-**Option B: Python Script**
-```
-python install.py
-```
-
-### ⚠️ CUDA 12.x Highly Recommended (Optional)
-GPU acceleration dramatically speeds up face detection (~100x faster).
-
-Before running installer, optionally install NVIDIA CUDA Toolkit 12.x:
-https://developer.nvidia.com/cuda-12-4-0-download-wizard
-
-Then cuDNN 9.x: https://developer.nvidia.com/cudnn
-
-**Without CUDA:** App runs on CPU, face detection ~10x slower but functional.
-
----
-
 ## Requirements
 
 - **Python 3.12.x** (exactly 3.12, not 3.11 or 3.14+)
 - Windows 7 or newer
 - 4GB RAM minimum, 8GB+ recommended
 - Internet connection for package downloads
+- An NVIDIA GPU is highly recommended, AMD GPUs are unfortunately currently not supported  
 
 ### Why Python 3.12?
 - `onnxruntime` (inference engine) incompatible with Python 3.14+
-- `lapx` (Hungarian algorithm for tracking) requires 3.12.x wheels
+- `lapx` requires 3.12.x wheels
 - **Upgrading Python may break the installation**
 
----
-
-## CUDA & cuDNN Installation (Optional - Highly Recommended)
+## CUDA & cuDNN Installation (Optional, though highly recommended)
 
 Profiler Machine can run CPU-only, but GPU acceleration makes face detection ~100x faster.
 
@@ -61,7 +32,7 @@ Requires NVIDIA CUDA 12.x + cuDNN 9.x.
    - **Installer Type:** exe (local)
 3. Download & run installer
 4. Accept defaults or choose custom path
-5. Verify installation:
+5. Verify installation (run this command in cmd/any terminal):
    ```
    nvcc --version
    ```
@@ -79,7 +50,7 @@ Requires NVIDIA CUDA 12.x + cuDNN 9.x.
    - `lib/` files → `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.x\lib\x64\`
 
 ### Step 3: Verify Installation
-
+Again, in your terminal, type:
 ```bash
 python -c "import torch; print(torch.cuda.is_available())"
 ```
@@ -120,6 +91,26 @@ Then run installer normally.
 
 ---
 
+## Installing PROFM
+
+### Windows Users
+
+Navigate to the folder where you downloaded the project and find the following file:  
+```
+install.bat
+```
+Double-click or run in Command Prompt. The installation script handles everything else.
+
+### Linux/MacOS  
+With Python 3.12, run the following script:
+```
+python install.py
+```
+Unfortunately, at the time of writing this, I cannot guarantee that the program will work on these operating systems.  
+If anyone would like to contribute to the project and help make it cross-platform, feel free to do so.
+
+---
+
 ## What the Installer Does
 
 ### 1. Verifies Python 3.12
@@ -146,46 +137,12 @@ Uses `--ignore-installed bytetracker playsound` to preserve pre-installed versio
 
 ### 7. Verifies Imports
 Tests critical modules (InsightFace, PyQt5, OpenCV, onnxruntime).
-Warnings usually safe to ignore.
+Warnings usually safe to ignore (`pip` **will** warn about dependency conflicts, this is safe to ignore and the whole reason for the installation script).
 
 ### 8. Creates Directories
-- `config/` — settings, feeds, session state
+- `config/` — stores settings, feeds, session state
 - `logs/` — application logs
-- `assets/audio/voice/` — TTS cache
 
----
-
-## Problematic Packages (Handled by Installer)
-
-### bytetracker
-**Issue:** Has conflicting nested dependencies that override core packages.
-**Solution:** Installer pre-installs with `--no-deps`, then runs full requirements.txt (which respects already-installed version).
-
-### playsound
-**Issue:** Custom git fork has no wheels on Python 3.12; requires build tools or Git.
-**Solution:** Installer attempts git fork first, falls back to PyPI v1.2.2 if unavailable.
-Git fork: `https://github.com/taconi/playsound@92385c78ec05c2fc3afad1afc5edc9d1282aa1e5`
-PyPI fallback: `playsound==1.2.2`
-
----
-
-## Virtual Environment Activation
-
-**IMPORTANT:** After installation, always activate venv before running app.
-
-### Windows
-```
-call venv\Scripts\activate.bat
-```
-Prompt changes to `(venv) C:\path>`
-
-### Mac/Linux
-```
-source venv/bin/activate
-```
-Prompt changes to `(venv) user@machine:$`
-
-Verify activation: `python --version` should show 3.12.x
 
 ---
 
@@ -204,7 +161,7 @@ Rerun installer. Some packages are large (torch, onnxruntime).
 ```
 pip install --force-reinstall onnxruntime==1.24.4
 ```
-If still failing, check you have Visual C++ Redistributable installed.
+If still failing, check if you have Visual C++ Redistributable installed.
 
 ### "bytetracker import error"
 **Fix:** This is expected if your system lacks lap/lapx wheels.
@@ -217,7 +174,8 @@ If still failing: `pip install playsound==1.2.2`
 Audio alerts may not work, but app runs normally.
 
 ### "ModuleNotFoundError: No module named 'insightface'"
-**Fix:** Verify install completed:
+**Fix:** Verify install completed:  
+In your preferred console, type:
 ```
 pip list | grep insightface
 ```
@@ -237,18 +195,32 @@ source venv/bin/activate        (Mac/Linux)
 ```
 Verify: `(venv)` should appear in your command prompt.
 
-### 2. Launch Application
+### 2. Enroll yourself as root
+Navigate to `profiler-machine\database\enroll`, and place any image with a clear view of your face inside this folder.
+
+### 3. Launch Application
 ```
 python main.py
 ```
 
-First launch loads face/body models (~2GB downloaded, ~30 sec warmup).
-Check `logs/profiler_machine.log` if startup fails.
+On startup, the app will ask you to choose from available webcams that were detected on your computer.  
+Select any webcam(s) you'd like to add, and these will be automatically saved to `config\feeds.json`.  
+First launch loads face/body models (~2GB downloaded, ~30 sec warmup).  
+Check `logs/profiler_machine.log` if startup fails.  
+If all went well, try logging in by typing `profiler login 000-00-0000`.
 
-### 3. Mobile Access (Tailscale)
+### 4. Enroll further people
+If there's anyone else that you'd like to enroll, you can place an image of them in the same folder as before (`profiler-machine\database\enroll`). Everyone who is enrolled from this folder will be designated as `IRRELEVANT` unless manually changed from inside the app. Anyone who hasn't been enrolled and appears in any feed for more than a few seconds will be automatically enrolled (though they can be randomly designated as `IRRELEVANT` (89% chance), `PERPETRATOR`/`VICTIM` (5% chance each) or `THREAT` (1% chance)).
+
+### 5. Mobile Access (Tailscale)
+If you wish to access the PROFM web interface outside of your local network, follow these steps:
 1. Install Tailscale: https://tailscale.com/download
-2. Sign in and connect to network
-3. On phone: Open browser to `https://<your-machine-ip>:8000`
+2. Add your computer and phone (or other devices you wish to access the interface from) to the Tailnet
+3. Ensure all your devices are connected to the Tailnet
+4. On your phone: Open your browser and navigate to to `https://<tailscale-computer-ip>:8000`
+
+### 6. Enjoy!
+You now hold the entire power PROFM has to hold. If you'd like to see a list of console commands and what they do, you can either run `help` in the app's console, or check [COMMANDS.md](docs/COMMANDS.md).
 
 ---
 
@@ -281,12 +253,11 @@ python main.py
 
 ## System Requirements for ML Models
 
-**Face Recognition (InsightFace):** ~500MB disk, 2GB RAM
-**Body Detection (YOLOv8n):** ~50MB disk, 1GB RAM
-**Anti-Spoofing (MiniFASNetV2):** ~3MB disk, 512MB RAM
-**Whisper (Voice):** ~1.5GB disk, 2GB RAM
+**Face Recognition (InsightFace):** ~500MB disk, 2GB RAM  
+**Body Detection (YOLOv8n):** ~50MB disk, 1GB RAM  
+**Anti-Spoofing (MiniFASNetV2):** ~3MB disk, 512MB RAM  
 
-Total: ~2-3GB disk, 5-6GB RAM during operation.
+Total: <1GB disk, 3-5GB RAM during operation.
 
 ---
 
@@ -302,9 +273,10 @@ Total: ~2-3GB disk, 5-6GB RAM during operation.
 ## Getting Help
 
 1. Check `logs/profiler_machine.log` after errors
-2. GitHub Issues: https://github.com/antonhrx/profiler-machine
+2. GitHub Issues: https://github.com/anthrxc/profiler-machine
 3. Verify all dependencies:
    ```
    pip list
    ```
    Compare against `requirements.txt`
+4. If all else fails, use your preferred AI model to help you out (and please open a GitHub issue where you share the chat where your issues were solved)

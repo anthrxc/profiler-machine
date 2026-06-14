@@ -483,13 +483,6 @@ class ConsoleWidget(QWidget):
             else:
                 self._print("No active tracking target.")
 
-        elif primary == "overlay":
-            if not args:
-                self._print(f"Roles: {', '.join(DESIGNATIONS)}", ok=False)
-                return
-            success = self.feed_manager._designator.set_debug_role(args[0].lower())
-            self._print(f"Debug overlay: {args[0]}" if success else f"Unknown role: '{args[0]}'", ok=success)
-
         elif primary == "alert":
             if not args:
                 self._print("Usage: alert [add/remove/list/mute/unmute]", ok=False)
@@ -545,7 +538,6 @@ class ConsoleWidget(QWidget):
             self._print("─" * 60)
             self._print("track <SSN>             Track subject across all feeds")
             self._print("untrack                 Clear active tracking target")
-            self._print("overlay <role>          Force debug overlay role")
             self._print("─" * 60)
             self._print("feed add <src> [fliph] [flipv]   Add video feed")
             self._print("feed remove/focus/grid/list/flip Manage feeds")

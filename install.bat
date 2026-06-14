@@ -65,20 +65,26 @@ if errorlevel 1 (
 )
 echo.
 
-REM Upgrade pip and wheel. Pin setuptools below 81 because setuptools 81
-REM removed importable pkg_resources, which breaks legacy source builds (lap).
-echo [3/9] Upgrading pip and wheel, pinning setuptools...
+REM Write a pip constraints file capping setuptools below 81.
+REM setuptools 81 removed importable pkg_resources, which breaks legacy
+REM source builds (lap, pulled in transitively by ultralytics). Exporting
+REM this via PIP_CONSTRAINT applies the cap to pip's isolated BUILD envs too,
+REM not just this venv - that is what actually fixes the lap build.
+echo [3/9] Configuring build constraints (setuptools fix)...
+(echo setuptools^<81)>constraints.txt
+set "PIP_CONSTRAINT=%CD%\constraints.txt"
 python -m pip install --upgrade pip wheel --quiet
-python -m pip install "setuptools<81" --quiet
+python -m pip install --upgrade setuptools --quiet
 if errorlevel 1 (
     echo ERROR: Failed to set up pip/setuptools/wheel
     pause
     exit /b 1
 )
-echo [OK] pip, setuptools (<81), and wheel ready
+for /f "tokens=2" %%v in ('python -m pip show setuptools 2^>nul ^| find "Version:"') do set SETUPTOOLS_VERSION=%%v
+echo [OK] pip and wheel ready, setuptools pinned to %SETUPTOOLS_VERSION%
 echo.
 
-REM Pre-install lapx (provides the lap module, bypasses lap build conflicts)
+REM Pre-install lapx (prebuilt wheels, provides the lap module, no compiler needed)
 echo [4/9] Pre-installing lapx (lap conflict workaround)...
 python -m pip install lapx==0.9.4 --quiet
 if errorlevel 1 (
@@ -87,13 +93,22 @@ if errorlevel 1 (
 echo [OK] lapx prepared
 echo.
 
-REM Pre-install bytetracker with --no-deps (dependency workaround)
-echo [5/9] Pre-installing bytetracker (--no-deps workaround)...
+REM Pre-install bytetracker and ultralytics with --no-deps.
+REM Both declare a dependency on the 'lap' distribution, which only ships as a
+REM source build (needs numpy + a compiler at build time) and keeps failing.
+REM lapx (installed above) already provides the 'lap' import at runtime, so we
+REM install these --no-deps to stop pip from ever pulling/building real lap.
+REM requirements.txt is a full freeze, so every other dependency is still pinned.
+echo [5/9] Pre-installing bytetracker and ultralytics (--no-deps workaround)...
 python -m pip install --no-deps bytetracker==0.3.2 --quiet
 if errorlevel 1 (
     echo WARNING: bytetracker pre-install failed, will attempt in main install
 )
-echo [OK] bytetracker prepared
+python -m pip install --no-deps ultralytics==8.3.50 --quiet
+if errorlevel 1 (
+    echo WARNING: ultralytics pre-install failed, will attempt in main install
+)
+echo [OK] bytetracker and ultralytics prepared
 echo.
 
 REM Pre-install playsound from PyPI
@@ -105,7 +120,9 @@ if errorlevel 1 (
 echo [OK] playsound prepared
 echo.
 
-REM Install ALL dependencies from requirements.txt
+REM Install ALL dependencies from requirements.txt.
+REM PIP_CONSTRAINT (set above) is still in effect and propagates to the
+REM isolated build env used for lap, so pkg_resources is available there.
 echo [7/9] Installing all dependencies from requirements.txt...
 echo This may take several minutes (installing torch, onnxruntime, etc)...
 python -m pip install -r requirements.txt --prefer-binary --quiet
@@ -119,11 +136,11 @@ echo.
 
 REM Verify critical imports
 echo [8/9] Verifying critical imports...
-python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch; import lap; import bytetracker" >nul 2>&1
+python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch; import lap; import bytetracker; import ultralytics" >nul 2>&1
 if errorlevel 1 (
     echo WARNING: Some critical imports failed
     echo Run this to see the full error:
-    echo   python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch; import lap; import bytetracker"
+    echo   python -c "import insightface; import PyQt5; import cv2; import onnxruntime; import torch; import lap; import bytetracker; import ultralytics"
     pause
     exit /b 1
 ) else (
@@ -139,12 +156,16 @@ if not exist "logs" mkdir logs
 echo [OK] Directories created
 echo.
 
+del /f constraints.txt
+echo [OK] Erased temporary files
+echo.
+
 echo ========================================
 echo Installation Complete!
 echo ========================================
 echo.
-echo Installed packages:
-python -m pip list
+echo IMPORTANT: Ignore pip errors about dependency conflicts,
+echo   this is expected and the sole purpose of this installation script.
 echo.
 echo IMPORTANT: Always activate venv before running:
 echo   call venv\Scripts\activate.bat

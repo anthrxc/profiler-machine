@@ -173,7 +173,7 @@ class Console(QWidget):
 
         # Always available commands
         print("\n[ALWAYS AVAILABLE]")
-        print("  shutdown              Exit the application")
+        print("  quit              Exit the application")
         print("  fullscreen        Toggle fullscreen display")
         print("  help [command]    Show this help, or details on a specific command")
 
@@ -198,9 +198,9 @@ class Console(QWidget):
         designation = self._get_user_designation()
 
         help_texts = {
-            "shutdown": (
-                "SHUTDOWN — Exit the application\n"
-                "  Syntax: shutdown\n"
+            "quit": (
+                "QUIT — Exit the application\n"
+                "  Syntax: quit\n"
                 "  Closes Profiler Machine and all active video feeds."
             ),
             "fullscreen": (
@@ -285,7 +285,7 @@ class Console(QWidget):
         primary = parts[0].lower()
         args = parts[1:]
 
-        if primary == "shutdown":
+        if primary == "quit":
             self._set_status("SHUTTING DOWN...")
             self.main_window.close()
 

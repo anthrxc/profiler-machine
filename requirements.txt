@@ -2,7 +2,6 @@ albucore==0.0.24
 albumentations==2.0.8
 annotated-types==0.7.0
 blinker==1.9.0
-bytetracker==0.3.2
 certifi==2026.2.25
 cffi==2.0.0
 charset-normalizer==3.4.6
@@ -90,7 +89,6 @@ tqdm==4.67.3
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2026.2
-ultralytics==8.3.50
 ultralytics-thop==2.0.19
 urllib3==2.7.0
 wcwidth==0.6.0
