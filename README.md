@@ -187,7 +187,7 @@ Enjoy!
 
 ## License
 
-[AGPL-3.0 license](https://github.com/anthrxc/profiler-machine/LICENSE.md), *sorry*.
+[AGPL-3.0 license]((https://github.com/anthrxc/profiler-machine/blob/main/LICENSE.md)), *sorry*.
 
 ---
 
