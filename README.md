@@ -44,7 +44,7 @@
 **Mobile Web Interface**
 - Flask-based web server (port 8000, configurable) with HTTPS via self-signed ECDSA P-256 cert
 - Four tabs: FEEDS (MJPEG streams), SUBJECTS (subject cards), CONSOLE (full terminal), SCAN (face ID)
-- Accessible remotely over [Tailscale](https://tailscale.com), see [INSTALL.md](https://github.com/anthrxc/profiler-machine/docs/INSTALL.md)
+- Accessible remotely over [Tailscale](https://tailscale.com), see [INSTALL.md](docs/INSTALL.md)
 
 **System**
 - Full process hot-restart via `restart` command
@@ -93,7 +93,7 @@ install.bat
 python install.py
 ```
 
-For further details about installation and setup, please see [INSTALL.md](https://github.com/anthrxc/profiler-machine/docs/INSTALL.md).
+For further details about installation and setup, please see [INSTALL.md](docs/INSTALL.md).
 
 ---
 
@@ -187,7 +187,7 @@ Enjoy!
 
 ## License
 
-[AGPL-3.0 license](https://github.com/anthrxc/profiler-machine/blob/main/LICENSE.md), *sorry*.
+[AGPL-3.0 license](LICENSE.md), *sorry*.
 
 ---
 
