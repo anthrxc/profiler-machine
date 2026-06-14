@@ -220,7 +220,7 @@ If you wish to access the PROFM web interface outside of your local network, fol
 4. On your phone: Open your browser and navigate to to `https://<tailscale-computer-ip>:8000`
 
 ### 6. Enjoy!
-You now hold the entire power PROFM has to hold. If you'd like to see a list of console commands and what they do, you can either run `help` in the app's console, or check [COMMANDS.md](docs/COMMANDS.md).
+You now hold the entire power PROFM has to hold. If you'd like to see a list of console commands and what they do, you can either run `help` in the app's console, or check [COMMANDS.md](/COMMANDS.md).
 
 ---
 
