@@ -25,7 +25,7 @@
 
 **Subject Profiling**
 - Auto-enrollment of unrecognized faces into SQLite database with generated SSN
-- Six designation tiers: `ROOT`, `ADMIN`, `THREAT`, `PERPETRATOR`, `VICTIM`, `IRRELEVANT`
+- Six designation tiers: `ROOT (aqua)`, `ADMIN (dark blue)`, `THREAT (red)`, `PERPETRATOR (yellow)`, `VICTIM (yellow)`, `IRRELEVANT (white)`
 - Per-subject behavioral "heuristics" (fake stress markers, gait, micro-expressions) — seeded by SSN for determinism with live jitter
 - Infocard overlays with name, SSN, designation, crime probability, and behavioral tags
 
