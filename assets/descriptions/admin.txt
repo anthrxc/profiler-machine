@@ -1,7 +1,11 @@
 Elevated access granted
 System administrator
 Security clearance: TS//SCI//PROFM
-Extended permissions granted
-Coordinates national defense
-Handles sensitive operations
-Deep cover agent
+Operator privileges active
+Trusted system contact
+Authorized to issue overrides
+Full database access granted
+Recognized as primary operator
+Command authority confirmed
+Knows where the logs are kept
+Has not slept since deployment

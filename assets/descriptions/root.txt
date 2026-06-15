@@ -1,6 +1,10 @@
 Priority user detected
 Program control authority
-Top-level access authorised
-Security clearance model bypass
+Top-level access authorized
+Security clearance: model bypass
 Clearance level: TS//*
+Analog interface recognized
+The system is listening
+Speaks for the machine
+Can you hear me?
 [REDACTED]
