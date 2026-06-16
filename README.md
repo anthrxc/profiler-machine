@@ -24,10 +24,10 @@
 - Body detection via YOLOv8n for tracking subjects even when faces aren't visible
 
 **Subject Profiling**
-- Auto-enrollment of unrecognized faces into SQLite database with generated SSN
-- Six designation tiers: `ROOT (aqua)`, `ADMIN (dark blue)`, `THREAT (red)`, `PERPETRATOR (yellow)`, `VICTIM (yellow)`, `IRRELEVANT (white)`
-- Per-subject behavioral "heuristics" (fake stress markers, gait, micro-expressions) — seeded by SSN for determinism with live jitter
-- Infocard overlays with name, SSN, designation, crime probability, and behavioral tags
+- Auto-enrollment of unrecognized faces into SQLite database with generated SSN  
+- Per-subject behavioral "heuristics" (fake stress markers, gait, micro-expressions) — seeded by SSN for determinism with live jitter  
+- Infocard overlays with name, SSN, designation, crime probability, and behavioral tags  
+- Six designation tiers, explained in detail further below
 
 **Alert Engine**
 - Rule-based alert system: fires on designation, co-presence, or SSN match  
@@ -51,6 +51,19 @@
 - Floating log viewer with filters
 - Continuous log writes to `logs/profiler_machine.log`
 - Startup warmup screen with per-module status
+
+**Designations**
+| Designation | Overlay color | Description |
+|---|---|---|
+| ROOT | cyan | system creator |
+| ADMIN | dark blue | person trusted by ROOT with system operations |
+| THREAT | red | "threat" to national security or system survival |
+| PERPETRATOR | yellow | about to "commit" a violent crime |
+| VICTIM | yellow | about to "be" a victim to a violent crime |
+| IRRELEVANT | white | everyone else, "normal people" |
+> **On ROOT vs. ADMIN:**
+ROOT is reserved for whoever *created* the program, as in Finch who created the Machine.  
+ADMIN is anyone ROOT trusts to operate it.  
 
 ---
 
