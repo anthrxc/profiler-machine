@@ -62,6 +62,13 @@
   <img src="docs/images/facial_recognition.png"/>
 </p>
 
+### Profiler infocards
+
+<p align="center">
+  <img src="docs/images/infocards.png"/>
+</p>
+
+
 ### Alerts engine
 
 <p align="center">
