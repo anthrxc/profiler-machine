@@ -3,10 +3,11 @@
 ## Requirements
 
 - **Python 3.12.x** (exactly 3.12, not 3.11 or 3.14+)
-- Windows 7 or newer
+- Windows 7 or newer, **or** a modern Linux distribution (verified on Arch)
 - 4GB RAM minimum, 8GB+ recommended
 - Internet connection for package downloads
 - An NVIDIA GPU is highly recommended, AMD GPUs are unfortunately currently not supported  
+- **Linux only:** an audio CLI player on `PATH` for alert sounds — `ffmpeg` (provides `ffplay`) is recommended; `paplay`/`aplay` also work. Without one the app runs fine, alerts are just silent.
 
 ### Why Python 3.12?
 - `onnxruntime` (inference engine) incompatible with Python 3.14+
@@ -101,13 +102,35 @@ install.bat
 ```
 Double-click or run in Command Prompt. The installation script handles everything else.
 
-### Linux/MacOS  
-With Python 3.12, run the following script:
+### Linux
+
+Run the cross-platform installer:
 ```
 python install.py
 ```
-Unfortunately, at the time of writing this, I cannot guarantee that the program will work on these operating systems.  
-If anyone would like to contribute to the project and help make it cross-platform, feel free to do so.
+The installer needs a Python 3.12 interpreter. It looks for one in this order:
+1. `python3.12` on your `PATH`
+2. the interpreter you launched it with (if it happens to be 3.12)
+3. a standalone 3.12 fetched via [`uv`](https://docs.astral.sh/uv/)
+
+Arch and other rolling distros ship Python 3.13+, which breaks `onnxruntime`/`lapx`, so
+install **either** a 3.12 package **or** `uv` before running the installer:
+
+```bash
+# Option A — uv (recommended; no system Python changes)
+sudo pacman -S uv         # or: curl -LsSf https://astral.sh/uv/install.sh | sh
+python install.py         # install.py calls `uv python install 3.12` for you
+
+# Option B — a distro/AUR 3.12 package, then point the installer at it
+python3.12 install.py
+```
+
+For alert audio, install an `ffplay`-capable player (skip if you don't care about sounds):
+```bash
+sudo pacman -S ffmpeg     # Debian/Ubuntu: sudo apt install ffmpeg
+```
+
+> macOS is untested. The installer's logic is the same there; contributions welcome.
 
 ---
 

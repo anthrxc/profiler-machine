@@ -1,4 +1,5 @@
 .venv
+venv
 modules/__pycache__
 modules/core/__pycache__
 modules/io/__pycache__
@@ -9,4 +10,5 @@ __pycache__
 *.pyc
 config
 logs
+install.log
 web/certs
