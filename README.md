@@ -1,14 +1,13 @@
 <p align="center">
   <img src="web/static/logo.jpg" alt="Profiler Machine" width="600"/>
-</p>
-
-<p align="center">
+  <br>
   <img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square&logo=python&logoColor=white"/>
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey?style=flat-square&logo=windows"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-v1.0.0-brightgreen?style=flat-square"/>
   <br>
-  <a href='https://ko-fi.com/G6C121PGWM' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi4.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
+  <br>
+  <a href='https://ko-fi.com/G6C121PGWM' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi3.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
 </p>
 
 ---
