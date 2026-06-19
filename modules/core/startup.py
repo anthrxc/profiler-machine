@@ -237,11 +237,16 @@ class LoadingScreen(QWidget):
         # FACIAL_DETECTION
         self._begin_step(STEPS[5])
         try:
-            os.add_dll_directory(CUDA_PATH)
-            ctypes.WinDLL(os.path.join(CUDA_PATH, "nvrtc-builtins64_128.dll"))
             import onnxruntime as ort
-            ort.preload_dlls(cuda=True, cudnn=False, msvc=True, directory=CUDA_PATH)
-            ort.preload_dlls(cuda=False, cudnn=True, directory=CUDNN_PATH)
+            # Windows needs the CUDA/cuDNN DLLs preloaded in the right order
+            # before onnxruntime touches them. On Linux the CUDA libraries are
+            # found via the nvidia-*-cu12 wheels / the dynamic loader, so we
+            # skip this entirely (these APIs are Windows-only and would raise).
+            if os.name == "nt":
+                os.add_dll_directory(CUDA_PATH)
+                ctypes.WinDLL(os.path.join(CUDA_PATH, "nvrtc-builtins64_128.dll"))
+                ort.preload_dlls(cuda=True, cudnn=False, msvc=True, directory=CUDA_PATH)
+                ort.preload_dlls(cuda=False, cudnn=True, directory=CUDNN_PATH)
 
             from insightface.app import FaceAnalysis
             app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])

@@ -58,24 +58,63 @@ def pip(args, py=None, quiet=True, env=None):
     return run([python, "-m", "pip", *args], check=True, quiet=quiet, env=env)
 
 
+def _probe_312(cmd):
+    """Return the version string if `cmd --version` reports 3.12.x, else None."""
+    try:
+        probe = subprocess.run(
+            [*cmd, "--version"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+    except (OSError, ValueError):
+        return None
+    if probe.returncode != 0 or not probe.stdout.strip():
+        return None
+    version = probe.stdout.strip().split()[-1]
+    return version if version.startswith("3.12") else None
+
+
 def find_python_312():
     """Return (command_list, version_str) that launches Python 3.12, or (None, None).
 
-    On Windows prefer the 'py -3.12' launcher; otherwise fall back to the
-    interpreter running this script if it happens to be 3.12.
+    Resolution order:
+      1. Windows 'py -3.12' launcher.
+      2. A 'python3.12' on PATH (common on Linux/macOS).
+      3. The interpreter running this script, if it is 3.12.x.
+      4. A standalone 3.12 provisioned by 'uv' (Arch et al. ship newer Python,
+         and 3.13+ breaks onnxruntime/lapx, so we fetch 3.12 on demand).
     """
     if os.name == "nt":
-        probe = subprocess.run(
-            ["py", "-3.12", "--version"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        )
-        if probe.returncode == 0:
-            return ["py", "-3.12"], probe.stdout.strip().split()[-1]
+        version = _probe_312(["py", "-3.12"])
+        if version:
+            return ["py", "-3.12"], version
 
-    # Fallback: this interpreter, only if it is 3.12.x
+    exe = shutil.which("python3.12")
+    if exe:
+        version = _probe_312([exe])
+        if version:
+            return [exe], version
+
     major, minor, micro = sys.version_info[:3]
     if (major, minor) == (3, 12):
         return [sys.executable], f"{major}.{minor}.{micro}"
+
+    uv = shutil.which("uv")
+    if uv:
+        # Idempotent: downloads a standalone CPython 3.12 if not already present.
+        subprocess.run(
+            [uv, "python", "install", "3.12"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        found = subprocess.run(
+            [uv, "python", "find", "3.12"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        path = found.stdout.strip()
+        if found.returncode == 0 and path:
+            version = _probe_312([path])
+            if version:
+                return [path], version
+
     return None, None
 
 
@@ -99,8 +138,12 @@ def main():
     py312, py_version = find_python_312()
     if py312 is None:
         fail("Python 3.12 not found")
-        print("Please install Python 3.12.x from https://www.python.org/downloads/")
-        print('Make sure to check "Add to PATH" during installation')
+        if os.name == "nt":
+            print("Please install Python 3.12.x from https://www.python.org/downloads/")
+            print('Make sure to check "Add to PATH" during installation')
+        else:
+            print("Install Python 3.12 via your package manager, or install 'uv'")
+            print("(https://docs.astral.sh/uv/) and re-run — it will fetch 3.12 automatically.")
         sys.exit(1)
     ok(f"Python {py_version} detected")
     print()

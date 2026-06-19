@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square&logo=python&logoColor=white"/>
-  <img src="https://img.shields.io/badge/platform-windows-lightgrey?style=flat-square&logo=windows"/>
+  <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey?style=flat-square&logo=windows"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-v1.0.0-brightgreen?style=flat-square"/>
 </p>
@@ -91,8 +91,9 @@ ADMIN is anyone ROOT trusts to operate it.
 ## Requirements
 
 - **Python 3.12.x** — required. 3.13+ breaks `onnxruntime` and `lapx`.
-- **Windows** — primary platform. Linux/macOS untested.
+- **Windows** or **Linux** — both supported (developed on Windows, verified on Arch Linux). macOS untested.
 - **NVIDIA GPU + CUDA 12.x + cuDNN 9.x** — optional but strongly recommended. Without GPU, face detection is ~10x slower.
+- **Linux only:** an audio player on `PATH` for alert sounds (`ffmpeg`/`ffplay`, or PulseAudio/PipeWire's `paplay`). Without one, the app still runs — alerts are just silent.
 
 ---
 
@@ -108,10 +109,11 @@ cd profiler-machine
 install.bat
 ```
 
-**Python (cross-platform, untested):**
+**Linux / macOS / cross-platform:**
 ```bash
 python install.py
 ```
+On Arch (and other distros that ship Python 3.13+), install [`uv`](https://docs.astral.sh/uv/) first — `install.py` uses it to fetch a standalone Python 3.12 automatically.
 
 For further details about installation and setup, please see [INSTALL.md](docs/INSTALL.md).
 
@@ -167,10 +169,11 @@ PROFM includes a web interface accessible from any device on your network.
 
 ## Known Limitations
 
-- Windows only (tested). Linux/macOS may work but are unsupported.
+- Windows and Linux are supported (Linux verified on Arch). macOS may work but is untested.
 - CPU-only mode is functional but slow (~10+ seconds per face).
 - Multiple simultaneous feeds increase GPU/CPU load significantly.
 - InsightFace must be imported before `QApplication` initializes on Windows (handled automatically).
+- On Linux, alert audio relies on a CLI player (`ffplay`/`paplay`/`aplay`); if none is installed, alerts are silent but the app is otherwise unaffected.
 
 ---
 
