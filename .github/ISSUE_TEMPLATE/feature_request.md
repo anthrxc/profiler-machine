@@ -6,12 +6,11 @@ labels: enhancement
 assignees: anthrxc
 ---
 
-**What you'd like**
+**What you'd like:**  
 
 
-**Why / use case**
+**Why / use case:**  
 
 
-**Aesthetic note**
-<!-- Does this affect overlays, designations, console voice, or UI?
-     If so, it may need discussion before implementation. -->
+**Aesthetic note**  
+*Does this affect overlays, designations, console voice, or UI?  If so, it may need discussion before implementation.*
