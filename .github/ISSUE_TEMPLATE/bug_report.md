@@ -6,24 +6,24 @@ labels: bug
 assignees: anthrxc
 ---
 
-**What happened**
+**What happened**  
 
 
-**What you expected**
+**What you expected**  
 
 
-**Steps to reproduce**
-1.
-2.
+**Steps to reproduce**  
+1.  
+2.  
 
-**Environment**
-- OS:
-- GPU (or CPU-only):
-- Python version:
+**Environment**  
+- OS:  
+- GPU (or CPU-only):  
+- Python version:  
 
-**Logs**
-<!-- Relevant lines from logs/profiler_machine.log -->
+**Logs**  
+<!-- Relevant lines from logs/profiler_machine.log -->  
 
 
-**Screenshot**
-<!-- If it's a UI issue -->
+**Screenshot**  
+<!-- If it's a UI issue -->  
